@@ -1,0 +1,84 @@
+name: Publish release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Determine package version
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "Release tags must use vMAJOR.MINOR.PATCH, optionally followed by a prerelease suffix."
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Restore
+        run: dotnet restore EventSourcing.slnx -p:Version="$PACKAGE_VERSION"
+
+      - name: Build Release and generate packages
+        run: |
+          dotnet build EventSourcing.slnx \
+            -c Release \
+            --no-restore \
+            -warnaserror \
+            -p:Version="$PACKAGE_VERSION"
+
+      - name: Run tests
+        run: |
+          dotnet test EventSourcing.slnx \
+            -c Release \
+            --no-build \
+            --no-restore
+
+      - name: Configure GitHub Packages authentication
+        run: |
+          dotnet nuget add source \
+            "https://nuget.pkg.github.com/GaelOn/index.json" \
+            --name github \
+            --username "$GITHUB_ACTOR" \
+            --password "$GH_TOKEN" \
+            --store-password-in-clear-text
+
+      - name: Publish NuGet packages
+        run: |
+          dotnet nuget push "artifacts/packages/*.nupkg" \
+            --source github \
+            --api-key "$GH_TOKEN" \
+            --skip-duplicate \
+            --no-symbols
+
+      - name: Attach packages and symbols to the release
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            artifacts/packages/*.nupkg \
+            artifacts/packages/*.snupkg \
+            --clobber

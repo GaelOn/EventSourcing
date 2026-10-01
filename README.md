@@ -34,7 +34,7 @@ dotnet build EventSourcing.slnx -c Release
 dotnet add YourApp.csproj package EventSourcing --version 0.1.0-alpha.5 --source ./artifacts/packages
 ```
 
-Add `EventSourcing.Compatibility` only if you need the legacy callback API. Packages and portable symbols are generated in `artifacts/packages/`; no package-feed publication is configured.
+Add `EventSourcing.Compatibility` only if you need the legacy callback API. Packages and portable symbols are generated in `artifacts/packages/`. Publishing a GitHub release triggers the release workflow, which publishes all three packages to GitHub Packages and attaches packages and symbols to the release.
 
 ## Define immutable state, events, and rules
 
@@ -367,7 +367,7 @@ dotnet build EventSourcing.slnx --no-restore
 dotnet test EventSourcing.slnx --no-build
 ```
 
-GitHub Actions builds Release with warnings as errors, runs tests, and uploads NuGet packages, portable symbols, and TRX results. Package artifacts are retained for 30 days and test results for 14 days. Download them from the workflow run; no feed publication is configured.
+GitHub Actions builds Release with warnings as errors, runs tests, and uploads NuGet packages, portable symbols, and TRX results. Package artifacts are retained for 30 days and test results for 14 days. Download them from the workflow run. Published GitHub releases trigger `.github/workflows/release.yml`: tags such as `v0.1.0-alpha.5` determine the package version for restore and build, followed by the full correctness suite, publication to GitHub Packages, and attachment of `.nupkg` and `.snupkg` files. Release publishing uses the repository token; it does not publish to NuGet.org.
 
 Performance measurements use the dedicated BenchmarkDotNet project, independently of correctness tests:
 
