@@ -1,6 +1,6 @@
 # EventSourcing
 
-Standalone .NET 10 library for immutable event streams, deterministic replay, and atomic multi-stream persistence contracts.
+Standalone .NET 10 library for immutable event streams, typed business state handlers, deterministic replay, and atomic multi-stream persistence contracts.
 
 `EventSourcedAggregate<TState, TEvent>` is a supported business-root abstraction in the core package. It composes an `EventStream<TState, TEvent>` for immutable calculation, deterministic replay, and optimistic concurrency through storage ports. `EventStreamBatch` commits related streams atomically. `InMemoryEventStreamStore<TEvent>` is a thread-safe, non-durable implementation included in the package.
 
@@ -47,6 +47,27 @@ This prerelease introduces breaking API changes:
 - `IEventStreamStore<TEvent>` implementations must validate the entire append batch, reject stale versions and duplicate IDs, and preserve storage on failure. After a stale write, reload and reconcile rather than blindly retrying.
 
 History uses structurally shared immutable lists and identity sets. `Apply` no longer scans or copies all prior events, and saved views reuse history. The memory store validates only the incoming suffix against its stored identity index, stages every participant in a new immutable ledger, then publishes once. Full replay still reads and validates every event. Snapshots are optional checkpoints; deleting event history, automatic checkpoint scheduling, and automatic retries are not implemented.
+
+## Typed event handlers
+
+`EventSourcing.Handlers.IEventHandler<TState, TEvent>` expresses a pure state transition through `TState Handle(TState state, TEvent @event)`. Use composition to give an aggregate several typed handlers, or implement several interfaces on one business object. Each handler must use its supplied state rather than reading a captured root instance.
+
+```csharp
+var dispatcher = EventHandlerDispatcher<InventoryState, WarehouseEvent>.CreateBuilder()
+    .Register<StockReceived>(receivedHandler)
+    .Register<StockShipped>(shippedHandler)
+    .Build();
+var stream = new EventStream<InventoryState, WarehouseEvent>(
+    aggregateId, openingState, dispatcher.Reduce);
+```
+
+Import `EventSourcing.Handlers`. Concrete events derive from the common stream event type and preserve their runtime type, identity, and payload in `Clone`. See the [repository README](../../README.md#compose-typed-event-handlers) for complete types and registration examples.
+
+The dispatcher matches exact runtime types with one handler per registration. Duplicate registration throws `ArgumentException`; missing registration throws `UnhandledEventException`, exposing `EventType`. There is no base/interface fallback or silently ignored event. Null inputs and null results fail; business exceptions propagate. Existing immutable stream failure guarantees apply.
+
+Each `Build()` captures an immutable map; later builder edits cannot alter built dispatchers. Builders are not thread-safe. Dispatchers can be shared when their retained handler instances are pure and reentrant, and state/events are deeply immutable. No I/O, mutable captured aggregate state, or command dispatch is introduced.
+
+Application DI or startup configuration can supply handler instances to `Register`; core has no DI dependency and performs no service lookup during reduction. Retain dependencies for the dispatcher's lifetime. Freeze configuration and version the handler set/parameters with the persisted `RuleVersion`. The same dispatcher acts as reducer for live application, full replay, and snapshot suffix replay. This additive feature is available in `0.1.0-alpha.4`; existing delegate reducers remain supported.
 
 ## Replay provenance
 
@@ -150,10 +171,10 @@ dotnet build EventSourcing.slnx -c Release
 dotnet test EventSourcing.slnx -c Release --no-build
 ```
 
-Packages are written to the repository's ignored `artifacts/packages/` directory. The package IDs are `EventSourcing` and `EventSourcing.Compatibility`; both default to `0.1.0-alpha.3`. Release builds also generate portable-symbol `.snupkg` packages. Override the version when creating another release:
+Packages are written to the repository's ignored `artifacts/packages/` directory. The package IDs are `EventSourcing` and `EventSourcing.Compatibility`; both default to `0.1.0-alpha.4`. Release builds also generate portable-symbol `.snupkg` packages. Override the version when creating another release:
 
 ```sh
-dotnet build EventSourcing.slnx -c Release -p:Version=0.1.0-alpha.4
+dotnet build EventSourcing.slnx -c Release -p:Version=0.1.0-alpha.5
 ```
 
 To package an already built Release library explicitly:

@@ -8,7 +8,7 @@ The application defines what its state and events mean. The library handles even
 
 | Package | Purpose | When to use it |
 | --- | --- | --- |
-| `EventSourcing` | Immutable streams, supported aggregate roots, snapshots, and single/multi-stream storage contracts. Includes thread-safe in-memory stores. | New applications and business logic. |
+| `EventSourcing` | Immutable streams, typed event handlers, supported aggregate roots, snapshots, and single/multi-stream storage contracts. Includes thread-safe in-memory stores. | New applications and business logic. |
 | `EventSourcing.Compatibility` | Legacy synchronous callback aggregates and a reversible transaction coordinator. Depends on the matching core package. | Maintaining existing integrations using prepare, commit, apply, undo, and rollback callbacks. |
 
 The dependency points from compatibility to core. Core has no dependency on compatibility, filesystem infrastructure, or an application framework.
@@ -24,11 +24,11 @@ Only `CallbackEventSourcedAggregate` in the compatibility package is obsolete. I
 
 ## Installation
 
-The current prerelease is `0.1.0-alpha.3`. Build the packages locally, then reference core from your configured local feed:
+The current prerelease is `0.1.0-alpha.4`. Build the packages locally, then reference core from your configured local feed:
 
 ```sh
 dotnet build EventSourcing.slnx -c Release
-dotnet add YourApp.csproj package EventSourcing --version 0.1.0-alpha.3 --source ./artifacts/packages
+dotnet add YourApp.csproj package EventSourcing --version 0.1.0-alpha.4 --source ./artifacts/packages
 ```
 
 Add `EventSourcing.Compatibility` only if you need the legacy callback API. Packages and portable symbols are generated in `artifacts/packages/`; no package-feed publication is configured.
@@ -144,6 +144,100 @@ public sealed class InventoryAggregate
 ```
 
 Business invariants belong in the root and reducer. `State` must contain all immutable information needed to reconstruct the root and its owned entities. Services, stores, reducers, and callbacks belong outside that state.
+
+## Compose typed event handlers
+
+For aggregates sensitive to several event types, implement `IEventHandler<TState, TEvent>` for each transition and compose them through `EventHandlerDispatcher<TState, TEvent>`. The dispatcher supplies the stream's reducer; live updates, replay, and snapshot restoration follow the same business rules.
+
+This alternative inventory example uses the `InventoryState` defined above and a common event base. Concrete events must preserve their runtime type, identity, and payload when cloned:
+
+```csharp
+using EventSourcing.Handlers;
+
+public abstract class WarehouseEvent : EventBase<WarehouseEvent>
+{
+    public int Quantity { get; }
+
+    protected WarehouseEvent(Guid id, int quantity, EventMetadata? metadata)
+        : base(id, metadata ?? new EventMetadata(null, null))
+    {
+        if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
+        Quantity = quantity;
+    }
+}
+
+public sealed class StockReceived(Guid id, int quantity, EventMetadata? metadata = null)
+    : WarehouseEvent(id, quantity, metadata)
+{
+    public override WarehouseEvent Clone(EventMetadata metadata) =>
+        new StockReceived(Id, Quantity, metadata);
+}
+
+public sealed class StockShipped(Guid id, int quantity, EventMetadata? metadata = null)
+    : WarehouseEvent(id, quantity, metadata)
+{
+    public override WarehouseEvent Clone(EventMetadata metadata) =>
+        new StockShipped(Id, Quantity, metadata);
+}
+
+public sealed class StockReceivedHandler : IEventHandler<InventoryState, StockReceived>
+{
+    public InventoryState Handle(InventoryState state, StockReceived e) =>
+        state with { Item = state.Item with
+        { Quantity = checked(state.Item.Quantity + e.Quantity) } };
+}
+
+public sealed class StockShippedHandler : IEventHandler<InventoryState, StockShipped>
+{
+    public InventoryState Handle(InventoryState state, StockShipped e)
+    {
+        if (e.Quantity > state.Item.Quantity)
+            throw new InvalidOperationException("Insufficient stock.");
+        return state with { Item = state.Item with
+        { Quantity = state.Item.Quantity - e.Quantity } };
+    }
+}
+```
+
+Register handlers in application startup code:
+
+```csharp
+var dispatcher = EventHandlerDispatcher<InventoryState, WarehouseEvent>.CreateBuilder()
+    .Register<StockReceived>(new StockReceivedHandler())
+    .Register<StockShipped>(new StockShippedHandler())
+    .Build();
+
+var typedStream = new EventStream<InventoryState, WarehouseEvent>(
+    inventoryId, opening, dispatcher.Reduce);
+var typedShipmentId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+var updatedInventory = typedStream
+    .Apply(new StockReceived(receiptId, 5))
+    .Apply(new StockShipped(typedShipmentId, 2));
+// Quantity 13; the original remains at 10.
+```
+
+A business root can compose this stream by deriving from `EventSourcedAggregate<InventoryState, WarehouseEvent>`. Alternatively, one business object can implement several handler interfaces and be registered once for each handled type. Methods must use their supplied state, never a captured root's current state.
+
+For dependency injection, register instances resolved by your application's container rather than constructing them inline. A factory can express those dependencies without coupling core to a DI framework:
+
+```csharp
+public static class WarehouseHandlers
+{
+    public static EventHandlerDispatcher<InventoryState, WarehouseEvent> Create(
+        IEventHandler<InventoryState, StockReceived> received,
+        IEventHandler<InventoryState, StockShipped> shipped) =>
+        EventHandlerDispatcher<InventoryState, WarehouseEvent>.CreateBuilder()
+            .Register<StockReceived>(received)
+            .Register<StockShipped>(shipped)
+            .Build();
+}
+```
+
+Configuration may select known implementations and immutable parameters in the application's startup factory. The library does not load arbitrary type names or provide a configuration/container integration. Handler configuration and implementations form part of the recorded business `RuleVersion`; retain the corresponding factory and handlers for replay and checkpoint compatibility.
+
+Dispatch matches the **exact runtime type**. A base-type handler is not a catch-all. Duplicate registrations throw `ArgumentException`; an unregistered type throws `UnhandledEventException` with its `EventType`. Null arguments and null handler results are rejected. Business exceptions propagate and leave the original stream unchanged.
+
+Each `Build()` captures an immutable registration map. Later builder changes cannot alter an existing dispatcher; the builder itself is for single-threaded startup use. Handler instances are retained rather than cloned: keep them pure, reentrant, and free of mutable or disposed dependencies. No commands, external effects, or asynchronous I/O belong in these state transitions.
 
 ## Snapshot and restore
 

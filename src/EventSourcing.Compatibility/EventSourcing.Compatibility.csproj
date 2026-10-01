@@ -6,7 +6,7 @@
     <IsPackable>true</IsPackable>
     <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GeneratePackageOnBuild>
     <PackageId>EventSourcing.Compatibility</PackageId>
-    <Version>0.1.0-alpha.3</Version>
+    <Version>0.1.0-alpha.4</Version>
     <Authors>Family Horizon</Authors>
     <Description>Legacy synchronous reversible callback aggregates for EventSourcing.</Description>
     <PackageTags>event-sourcing;compatibility</PackageTags>

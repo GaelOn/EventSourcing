@@ -18,3 +18,5 @@
 - Capture checkpoints only without pending events. Save them separately after event commits; failed checkpoint writes never undo committed events. Keep full events and opening definitions for rebuilding.
 - Snapshot compatibility uses aggregate ID, rule version, and state schema version. Load the newest compatible checkpoint, replay only its validated suffix, and retain earlier IDs for immediate duplicate rejection. Propagate corruption/storage errors and reject ahead-of-ledger checkpoints.
 - Restore related roots from one consistent `ReadBatchFromAsync` result. Individual snapshot loads do not provide a consistent household view. Retain reconciliation, stale-write, failure, cancellation, and concurrency tests for snapshots and range reads.
+
+- Typed state handlers are pure, reentrant transitions selected by exact runtime event type. Freeze dispatcher registrations, reject duplicates/missing handlers, and include handler configuration in the replay rule version. Core does not depend on a DI framework or implement command dispatch.
