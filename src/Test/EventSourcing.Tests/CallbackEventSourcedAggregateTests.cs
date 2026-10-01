@@ -2,7 +2,7 @@ using EventSourcing.Transaction;
 
 namespace EventSourcing.Tests;
 
-public sealed class EventSourcedAggregateTests
+public sealed class CallbackEventSourcedAggregateTests
 {
     [Fact]
     public void Successful_commit_applies_the_prepared_change_once()

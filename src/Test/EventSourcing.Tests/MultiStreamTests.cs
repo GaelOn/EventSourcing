@@ -164,6 +164,11 @@ public sealed class MultiStreamTests : IDisposable
                 var concurrent = await store.ReadBatchAsync(new[] { Source, Destination });
                 Assert.Equal(concurrent[Source].Count, concurrent[Destination].Count);
                 Assert.Equal(0m, concurrent.Values.SelectMany(events => events).Sum(e => e.Amount));
+                var suffixes = await store.ReadBatchFromAsync(new[] {
+                    new StreamReadRequest(Source, i), new StreamReadRequest(Destination, i) });
+                Assert.Equal(suffixes[Source].Version, suffixes[Destination].Version);
+                Assert.Equal(suffixes[Source].Events.Count, suffixes[Destination].Events.Count);
+                Assert.Equal(0m, suffixes.Values.SelectMany(slice => slice.Events).Sum(e => e.Amount));
                 Assert.True(phase.SignalAndWait(TimeSpan.FromSeconds(10)), "Writer did not finish its commit.");
                 // Every round must observe progress, so the test cannot pass by sampling only an empty ledger.
                 var committed = await store.ReadBatchAsync(new[] { Source, Destination });

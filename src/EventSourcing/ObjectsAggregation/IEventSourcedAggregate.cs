@@ -1,10 +1,11 @@
-using EventSourcing.Transaction;
+using EventSourcing.Streams;
 
 namespace EventSourcing.ObjectsAggregation;
 
 public interface IEventSourcedAggregate<TState, TEvent> : IAggregate
+    where TState : class
     where TEvent : class, IEvent<TEvent>
 {
-    IReadOnlyCollection<TEvent> Events {get;}
-    TState? State {get;}
+    TState State { get; }
+    EventStream<TState, TEvent> Stream { get; }
 }

@@ -2,13 +2,29 @@
 
 Standalone .NET 10 library for immutable event streams, deterministic replay, and atomic multi-stream persistence contracts.
 
-`EventStream<TState, TEvent>` is the preferred aggregate API. It provides immutable calculation, deterministic replay, and optimistic concurrency through storage ports. `EventStreamBatch` commits related streams atomically. `InMemoryEventStreamStore<TEvent>` is a thread-safe, non-durable implementation included in the package.
+`EventSourcedAggregate<TState, TEvent>` is a supported business-root abstraction in the core package. It composes an `EventStream<TState, TEvent>` for immutable calculation, deterministic replay, and optimistic concurrency through storage ports. `EventStreamBatch` commits related streams atomically. `InMemoryEventStreamStore<TEvent>` is a thread-safe, non-durable implementation included in the package.
 
-Legacy callback aggregates are available only in the optional `EventSourcing.Compatibility` package. The core package does not contain or reference that API. New financial logic should use immutable streams and atomic store operations. No production database or distributed transaction is selected.
+The legacy `CallbackEventSourcedAggregate` lifecycle is available only in the optional `EventSourcing.Compatibility` package. The core package does not contain or reference that API. New financial logic should use immutable streams and atomic store operations. No production database or distributed transaction is selected.
 
 ## Identity and stream versions
 
 Callers supply a nonempty `Guid` event `Id`. Cloning preserves it. `EventMetadata` carries `long? Version` and `Guid? StreamId`, exposed by `IEvent.Metadata`, independently of event identity. New events are unassigned; acceptance tags a copy with the stream ID and next one-based version. Duplicate IDs are rejected within one stream, including across stored history and a new batch. Separate streams may contain the same source ID (for example, a correlated transfer); use `EventStreamBatch` to persist their effects together.
+
+## Business aggregate roots
+
+The aggregate root owns the business meaning, invariants, and entity access. The stream owns update mechanics and persistence positions. The core `EventSourcedAggregate<TState, TEvent>` is not obsolete and imposes no commit/apply/undo callbacks.
+
+Derive a business root from it, pass an immutable stream to its constructor, expose entities from `State`, and wrap changed/saved streams in a new root. `State` delegates to the composed stream, so there is one authoritative state rather than two competing copies. Typed business methods and reducer invariants remain in the derived root; the generic base cannot infer domain rules.
+
+`State` must contain the complete immutable data needed to restore the root and every owned entity. Do not snapshot a live root with services, storage references, reducers, or callbacks. `AggregateSnapshotTests` demonstrates root name, account entities, currency, and balance surviving file-backed restoration without replaying old events.
+
+## Migration to 0.1.0-alpha.3
+
+- `EventSourcedAggregate<TState, TEvent>`, `IAggregate`, `IEntity`, and `IEventSourcedAggregate` are core business abstractions in `EventSourcing.ObjectsAggregation`.
+- The callback implementation is now `CallbackEventSourcedAggregate<TState, TEvent>` with `ICallbackEventSourcedAggregate`, in the compatibility package. Callback consumers must update their base/interface names. Only the legacy callback lifecycle is obsolete.
+- The supported root takes an `EventStream` constructor argument. Its `IEventSourcedAggregate` exposes non-null business `State` and the composed `Stream`.
+- Storage adapters must implement `ReadFromAsync` and, for atomic stores, `ReadBatchFromAsync`. There is no fallback that downloads full historical payloads or loops over independent reads.
+- `Events` now means retained history after `HistoryStartVersion`. Opening-state streams still retain all history from version zero. After snapshot restoration, `Version` and `PersistedVersion` remain full stream positions and must never be inferred from `Events.Count`.
 
 ## Migration to 0.1.0-alpha.2
 
@@ -30,7 +46,7 @@ This prerelease introduces breaking API changes:
 - `HandleAsync(event, store)` calculates first, then saves. Storage failure cannot publish a changed aggregate. There is no post-save reducer or user callback that could fail after the durable commit.
 - `IEventStreamStore<TEvent>` implementations must validate the entire append batch, reject stale versions and duplicate IDs, and preserve storage on failure. After a stale write, reload and reconcile rather than blindly retrying.
 
-History uses structurally shared immutable lists and identity sets. `Apply` no longer scans or copies all prior events, and saved views reuse history. The memory store validates only the incoming suffix against its stored identity index, stages every participant in a new immutable ledger, then publishes once. Full replay still reads and validates every event. Snapshots, history compaction, and automatic retries are not implemented.
+History uses structurally shared immutable lists and identity sets. `Apply` no longer scans or copies all prior events, and saved views reuse history. The memory store validates only the incoming suffix against its stored identity index, stages every participant in a new immutable ledger, then publishes once. Full replay still reads and validates every event. Snapshots are optional checkpoints; deleting event history, automatic checkpoint scheduling, and automatic retries are not implemented.
 
 ## Replay provenance
 
@@ -56,13 +72,44 @@ A mismatched reducer version throws `ReplayRuleVersionException` before reductio
 
 `StreamTests` provides a concrete decimal-balance example: opening 100, income 25, expense 10 reconciles to 115 after both live execution and replay. `StreamPersistenceTests` exercises a test-only `JsonLedgerStore` against real files, using a self-contained test `JsonFileStore` for exclusive writer leases and atomic document replacement. Tests cover reopening, stale writes, stored duplicates, invalid batches, cancellation, corrupt history, and writer failure followed by retry. The core NuGet package has no dependency on that infrastructure or on filesystem APIs.
 
+## Snapshots
+
+`AggregateSnapshot<TState>` associates complete immutable business state with `AggregateId`, `StreamVersion`, `RuleVersion`, and a positive `SchemaVersion`. The cursor is a stream position, not the last event GUID. Version zero represents the original opening state; applications must persist that opening definition independently.
+
+Capture from a saved root or stream with no pending events. Capture rejects pending changes, including a branch whose event save failed. Checkpoint saving is a separate operation from committing events:
+
+```csharp
+var savedRoot = await changedRoot.SaveAsync(eventStore); // Typed wrapper supplied by the business root.
+await savedRoot.SaveSnapshotAsync(snapshotStore, "household/v1", 1);
+// If checkpoint saving fails, savedRoot and the committed event ledger remain valid.
+```
+
+`ISnapshotStore<TState>` returns the newest checkpoint matching aggregate identity, rule version, and schema version. Older/equal checkpoint writes cannot replace a newer entry for that same key. Rules and state schema have distinct versions: changing business rules does not automatically mean the serialized state shape changed. `InMemorySnapshotStore` is a thread-safe process-local implementation. The file-backed `JsonSnapshotStore` is a test fixture only.
+
+Load from a compatible checkpoint and apply only its later committed events:
+
+```csharp
+var restoredStream = await EventStream<HouseholdState, HouseholdEvent>.LoadAsync(
+    aggregateId, storedOpeningDefinition, "household/v1", 1, ReduceHouseholdV1,
+    eventStore, snapshotStore, cancellationToken);
+var restoredRoot = new HouseholdAggregate(restoredStream);
+```
+
+No compatible checkpoint means replay from the persisted opening definition. Snapshot storage/corruption errors propagate rather than being silently hidden; retained events allow an explicit recovery through full replay. A checkpoint ahead of the ledger, mismatched identity/cursor, incomplete suffix, duplicate identities, or incompatible direct restoration is rejected before business reduction. The cache trusts callers to provide committed, valid business state; it cannot prove a manually constructed snapshot matches its history or that a reducer implements its supplied rule identity.
+
+`ReadFromAsync(id, afterVersion)` returns a validated `StreamSlice`: only later event payloads, the current committed version, and earlier event IDs from one storage view. Earlier IDs are still loaded to preserve immediate duplicate rejection during `Apply`, including before the checkpoint. This index costs memory and work proportional to prior event count, but no earlier business payloads need to cross the port or be reduced. Durable adapters must retain their full identity index and atomically reject duplicates during writes.
+
+For a household spanning several roots, select compatible checkpoints, then issue **one** `ReadBatchFromAsync` for every participant cursor and restore each root from its returned slice. Individual `LoadAsync` calls can observe different ledger commits and do not form a consistent household view. Checkpoint versions may differ; the batch suffix read brings every participant to one consistent storage view. `SnapshotPersistenceTests` verifies transfer reconciliation, and `MultiStreamTests` races batch suffix reads against transfers.
+
+The JSON fixtures still read their complete documents; snapshots there avoid old reducer calls but do not provide database-style range I/O. Production range-read performance depends on the chosen durable adapter. Full event history and opening definitions remain available for diagnostics, rebuilding, and explicit migration; snapshots never delete them.
+
 ## Thread safety and multi-stream transactions
 
 - Immutable streams can be read, branched, and saved concurrently when state/events are immutable and the reducer is pure and reentrant. Generic constraints cannot enforce deep immutability. Branching does not mutate the original; competing saves are resolved by expected-version checks, not automatic merging.
 - Share one `InMemoryEventStreamStore` instance per ledger. It serializes single-stream and batch reads/writes under one gate and publishes a new ledger only after every participant validates. It is process-local and non-durable; separate instances do not share data.
-- `IAtomicEventStreamStore` extends the single-stream port with atomic `AppendBatchAsync` and consistent `ReadBatchAsync`. There is deliberately no fallback that loops over independent commits. Production adapters must provide one transaction covering all participants, including expected-version checks and duplicate detection.
+- `IAtomicEventStreamStore` extends the single-stream port with atomic `AppendBatchAsync` and consistent `ReadBatchAsync` and `ReadBatchFromAsync`. There is deliberately no fallback that loops over independent commits. Production adapters must provide one transaction covering all participants, including expected-version checks and duplicate detection.
 - `EventStreamBatch.SaveAsync` checks each participant once and returns saved views only after success. Unchanged participants still assert their versions, allowing read dependencies to participate in optimistic concurrency. Failure leaves all input views and pending events unchanged. Duplicate stream entries are rejected.
-- Use `ReadBatchAsync` when a household view must not observe half a transfer. Separate `ReadAsync` calls may observe different committed snapshots. Returned snapshots stay unchanged after subsequent writes.
+- Use `ReadBatchAsync` or `ReadBatchFromAsync` when a household view must not observe half a transfer. Separate `ReadAsync` calls may observe different committed snapshots. Returned snapshots stay unchanged after subsequent writes.
 - Cancellation before commit leaves all streams unchanged. Once committed, an adapter must report success rather than a late cancellation. Retry requires reloading and reconciling stale versions; a file lease conflict requires retrying the complete operation.
 
 For related streams using a common event type and state type:
@@ -103,10 +150,10 @@ dotnet build EventSourcing.slnx -c Release
 dotnet test EventSourcing.slnx -c Release --no-build
 ```
 
-Packages are written to the repository's ignored `artifacts/packages/` directory. The package IDs are `EventSourcing` and `EventSourcing.Compatibility`; both default to `0.1.0-alpha.2`. Release builds also generate portable-symbol `.snupkg` packages. Override the version when creating another release:
+Packages are written to the repository's ignored `artifacts/packages/` directory. The package IDs are `EventSourcing` and `EventSourcing.Compatibility`; both default to `0.1.0-alpha.3`. Release builds also generate portable-symbol `.snupkg` packages. Override the version when creating another release:
 
 ```sh
-dotnet build EventSourcing.slnx -c Release -p:Version=0.1.0-alpha.3
+dotnet build EventSourcing.slnx -c Release -p:Version=0.1.0-alpha.4
 ```
 
 To package an already built Release library explicitly:

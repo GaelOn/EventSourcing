@@ -1,10 +1,12 @@
 # EventSourcing.Compatibility
 
-Optional .NET 10 package containing the obsolete synchronous callback aggregate and its reversible transaction coordinator. New code should reference `EventSourcing` and use `EventStream<TState, TEvent>`.
+Optional .NET 10 package containing the obsolete synchronous `CallbackEventSourcedAggregate` and its reversible transaction coordinator. New business roots should reference `EventSourcing` and compose an `EventStream<TState, TEvent>` through the supported core `EventSourcedAggregate`. The business aggregate concept is not obsolete.
 
-This package depends on the matching `EventSourcing` core package. The core has no dependency on compatibility code. Existing `EventSourcing.ObjectsAggregation` and `EventSourcing.Transaction` namespaces are retained; add an explicit package reference when migrating callback consumers to `0.1.0-alpha.2`.
+This package depends on the matching `EventSourcing` core package. The core has no dependency on compatibility code. Existing `EventSourcing.ObjectsAggregation` and `EventSourcing.Transaction` namespaces are retained; add an explicit package reference when migrating callback consumers to `0.1.0-alpha.3`.
 
-The shared event contract now uses `EventMetadata` in namespace `EventSourcing`, `IEvent.Metadata`, and `EventMetadata.StreamId`. Update event constructors and `Clone(EventMetadata)` implementations accordingly. This is a breaking prerelease change.
+`0.1.0-alpha.3` renames the old callback class to `CallbackEventSourcedAggregate` and its interface to `ICallbackEventSourcedAggregate`. `IAggregate` and `IEntity` now come from core. The callback lifecycle and recovery behavior are preserved; snapshots belong to the supported immutable root/stream path.
+
+The shared event contract uses `EventMetadata` in namespace `EventSourcing`, `IEvent.Metadata`, and `EventMetadata.StreamId`. Update event constructors and `Clone(EventMetadata)` implementations accordingly. This is a breaking prerelease change.
 
 ## Callback contract
 

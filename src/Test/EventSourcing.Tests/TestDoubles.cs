@@ -35,7 +35,7 @@ internal sealed record TestState(string Value);
 
 // Keep exercising the supported compatibility API without suppressing warnings in production.
 #pragma warning disable CS0618
-internal sealed class TestAggregate : EventSourcedAggregate<TestState, TestEvent>
+internal sealed class TestAggregate : CallbackEventSourcedAggregate<TestState, TestEvent>
 {
     private readonly List<TestEvent> _events = [];
     public TestAggregate(ITransactionResult commitResult, TestSideEffect? sideEffect = null,

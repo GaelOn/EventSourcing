@@ -21,6 +21,40 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
     public async Task<IReadOnlyList<TEvent>> ReadAsync(Guid streamId, CancellationToken cancellationToken = default)
         => (await ReadBatchAsync(new[] { streamId }, cancellationToken))[streamId];
 
+    public async Task<StreamSlice<TEvent>> ReadFromAsync(Guid streamId, long afterVersion,
+        CancellationToken cancellationToken = default) =>
+        (await ReadBatchFromAsync(new[] { new StreamReadRequest(streamId, afterVersion) }, cancellationToken))[streamId];
+
+    public Task<IReadOnlyDictionary<Guid, StreamSlice<TEvent>>> ReadBatchFromAsync(
+        IReadOnlyList<StreamReadRequest> requests, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        var participants = requests.ToArray();
+        var ids = new HashSet<Guid>();
+        foreach (var request in participants)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            if (!ids.Add(request.StreamId)) throw new ArgumentException("Duplicate stream in read batch.", nameof(requests));
+        }
+        lock (_gate)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = new Dictionary<Guid, StreamSlice<TEvent>>();
+            foreach (var request in participants)
+            {
+                var stored = _streams.GetValueOrDefault(request.StreamId) ?? StoredStream.Empty;
+                if (request.AfterVersion > stored.History.Count)
+                    throw new StreamConcurrencyException(request.AfterVersion, stored.History.Count);
+                var offset = checked((int)request.AfterVersion);
+                result.Add(request.StreamId, new(request.StreamId, request.AfterVersion, stored.History.Count,
+                    stored.History.GetRange(offset, stored.History.Count - offset),
+                    stored.History.Take(offset).Select(e => e.Id)));
+            }
+            return Task.FromResult<IReadOnlyDictionary<Guid, StreamSlice<TEvent>>>(
+                new ReadOnlyDictionary<Guid, StreamSlice<TEvent>>(result));
+        }
+    }
+
     public Task<IReadOnlyDictionary<Guid, IReadOnlyList<TEvent>>> ReadBatchAsync(IReadOnlyList<Guid> streamIds,
         CancellationToken cancellationToken = default)
     {

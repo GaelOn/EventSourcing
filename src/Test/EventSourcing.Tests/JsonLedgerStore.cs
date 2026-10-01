@@ -13,6 +13,35 @@ internal sealed class JsonLedgerStore(string path) : IAtomicEventStreamStore<Led
         CancellationToken cancellationToken = default) =>
         (await ReadBatchAsync(new[] { streamId }, cancellationToken))[streamId];
 
+    public async Task<StreamSlice<LedgerEvent>> ReadFromAsync(Guid streamId, long afterVersion,
+        CancellationToken cancellationToken = default) =>
+        (await ReadBatchFromAsync(new[] { new StreamReadRequest(streamId, afterVersion) }, cancellationToken))[streamId];
+
+    public async Task<IReadOnlyDictionary<Guid, StreamSlice<LedgerEvent>>> ReadBatchFromAsync(
+        IReadOnlyList<StreamReadRequest> requests, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        var participants = requests.ToArray();
+        var ids = new HashSet<Guid>();
+        foreach (var request in participants)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            if (!ids.Add(request.StreamId)) throw new ArgumentException("Duplicate stream in read batch.", nameof(requests));
+        }
+        var streams = Decode(await _file.ReadAsync(cancellationToken));
+        var result = new Dictionary<Guid, StreamSlice<LedgerEvent>>();
+        foreach (var request in participants)
+        {
+            var history = streams.GetValueOrDefault(request.StreamId) ?? Array.Empty<LedgerEvent>();
+            if (request.AfterVersion > history.Count)
+                throw new StreamConcurrencyException(request.AfterVersion, history.Count);
+            var offset = checked((int)request.AfterVersion);
+            result.Add(request.StreamId, new(request.StreamId, request.AfterVersion, history.Count,
+                history.Skip(offset), history.Take(offset).Select(e => e.Id)));
+        }
+        return new ReadOnlyDictionary<Guid, StreamSlice<LedgerEvent>>(result);
+    }
+
     public async Task<IReadOnlyDictionary<Guid, IReadOnlyList<LedgerEvent>>> ReadBatchAsync(
         IReadOnlyList<Guid> streamIds, CancellationToken cancellationToken = default)
     {

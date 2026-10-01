@@ -11,6 +11,10 @@ public interface IAtomicEventStreamStore<TEvent> : IEventStreamStore<TEvent>
     Task<IReadOnlyDictionary<Guid, IReadOnlyList<TEvent>>> ReadBatchAsync(IReadOnlyList<Guid> streamIds,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Read suffixes, prefix identity indexes, and versions for all participants from one view.</summary>
+    Task<IReadOnlyDictionary<Guid, StreamSlice<TEvent>>> ReadBatchFromAsync(
+        IReadOnlyList<StreamReadRequest> requests, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Atomically check every expected version, validate every append, and publish the complete batch.
     /// Empty participant appends still assert their expected versions. Duplicate stream IDs are invalid.

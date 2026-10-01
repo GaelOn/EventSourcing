@@ -10,6 +10,13 @@ public interface IEventStreamStore<TEvent> where TEvent : class, IEvent<TEvent>
     Task<IReadOnlyList<TEvent>> ReadAsync(Guid streamId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Read only payloads after the cursor, together with earlier event IDs and the current version,
+    /// from one consistent view. Reject a cursor ahead of storage. Full history remains retained.
+    /// </summary>
+    Task<StreamSlice<TEvent>> ReadFromAsync(Guid streamId, long afterVersion,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reject stale versions, duplicate IDs across stored and new events, and invalid stream metadata.
     /// Failure must preserve storage. Successful return means the complete batch is committed.
     /// </summary>

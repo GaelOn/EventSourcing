@@ -3,10 +3,10 @@ using EventSourcing.Transaction;
 
 namespace EventSourcing.ObjectsAggregation;
 
-/// <summary>Compatibility API for synchronous reversible callbacks. Prefer EventStream for new aggregates.</summary>
-[Obsolete("Use EventSourcing.Streams.EventStream<TState, TEvent> for new aggregates. This callback API is retained for compatibility.")]
-public abstract class EventSourcedAggregate<TState, TEvent>
-    : IEventSourcedAggregate<TState, TEvent>
+/// <summary>Legacy synchronous reversible callback lifecycle. Business aggregate roots remain a supported core concept.</summary>
+[Obsolete("Use the core EventSourcedAggregate composing an EventStream for new business roots. This callback lifecycle is retained for compatibility.")]
+public abstract class CallbackEventSourcedAggregate<TState, TEvent>
+    : ICallbackEventSourcedAggregate<TState, TEvent>
     where TState : class
     where TEvent : class, IEvent<TEvent>
 {
@@ -27,11 +27,11 @@ public abstract class EventSourcedAggregate<TState, TEvent>
     /// <summary>
     /// Default dependency injection constructor.
     /// </summary>
-    protected EventSourcedAggregate()
+    protected CallbackEventSourcedAggregate()
         : this(new EventTransactionManager(),
                 null) { }
 
-    protected EventSourcedAggregate(
+    protected CallbackEventSourcedAggregate(
         IEventTransactionManager eventTransactionManager,
         TState? state)
     {
