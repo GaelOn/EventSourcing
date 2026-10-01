@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GeneratePackageOnBuild>
+    <PackageId>EventSourcing</PackageId>
+    <Version>0.1.0-alpha</Version>
+    <Authors>Family Horizon</Authors>
+    <Description>Experimental aggregate event acceptance and commit abstractions developed in Family Horizon.</Description>
+    <PackageTags>event-sourcing;aggregates</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageOutputPath>$(MSBuildThisFileDirectory)../../artifacts/packages</PackageOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Update="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>
