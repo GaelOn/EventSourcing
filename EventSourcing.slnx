@@ -2,9 +2,13 @@
   <Folder Name="/src/">
     <Project Path="src/EventSourcing/EventSourcing.csproj" />
     <Project Path="src/EventSourcing.Compatibility/EventSourcing.Compatibility.csproj" />
+    <Project Path="src/EventSourcing.DependencyInjection/EventSourcing.DependencyInjection.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="src/Test/EventSourcing.Tests/EventSourcing.Tests.csproj" />
+    <Project Path="src/Test/EventSourcing.DependencyInjection.Tests/EventSourcing.DependencyInjection.Tests.csproj" />
+    <Project Path="src/Test/EventSourcing.ExternalHandlers.Fixture/EventSourcing.ExternalHandlers.Fixture.csproj" />
+    <Project Path="src/Test/EventSourcing.ExternalHandlers.RegistrationFixture/EventSourcing.ExternalHandlers.RegistrationFixture.csproj" />
   </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/EventSourcing.PerformanceTests/EventSourcing.PerformanceTests.csproj" />

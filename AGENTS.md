@@ -24,3 +24,7 @@
 - Handlers provide pure Do/Undo transitions and enforce reversal preconditions. Immediate reversal restores the input state. Persisted cancellation appends a new compensating event; never remove history.
 - Prefer IEventReducer/identified dispatchers and automatic snapshot identity. Preserve bound rules through every stream lifecycle operation. Public Stream access intentionally supports immutable branching; application façades restrict business entry points when needed.
 - BenchmarkDotNet lives only in EventSourcing.PerformanceTests. Setup/IDs and correctness assertions stay outside measured operations; benchmarks run separately from correctness CI without timing thresholds.
+
+- `EventSourcing.DependencyInjection` is an optional package referencing core and Microsoft.Extensions.DependencyInjection.Abstractions only. Core never references the adapter or a DI framework; preserve manual composition.
+- Register explicitly identified keyed dispatchers, resolve/retain handlers only during construction, reject duplicate event/rule registrations, and freeze mapping configuration. Enforce scope lifecycle for further transitions; enable real-container scope validation in integration tests.
+- DI handler fixtures separate a core-only business assembly from the optional client registration module. Container implementation dependencies belong only to tests and consuming applications. Keep package-only consumers outside the solution until packages are generated.

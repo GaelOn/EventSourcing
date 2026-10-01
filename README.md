@@ -11,6 +11,7 @@ The application defines what its state and events mean. The library handles even
 | Package | Purpose | When to use it |
 | --- | --- | --- |
 | `EventSourcing` | Immutable streams, typed event handlers, supported aggregate roots, snapshots, and single/multi-stream storage contracts. Includes thread-safe in-memory stores. | New applications and business logic. |
+| `EventSourcing.DependencyInjection` | Optional constructor injection and explicit versioned dispatcher registration. Depends on core and DI abstractions only. | Applications using a keyed DI container. |
 | `EventSourcing.Compatibility` | Legacy synchronous callback aggregates and a reversible transaction coordinator. Depends on the matching core package. | Maintaining existing integrations using prepare, commit, apply, undo, and rollback callbacks. |
 
 The dependency points from compatibility to core. Core has no dependency on compatibility, filesystem infrastructure, or an application framework.
@@ -387,3 +388,34 @@ See the [benchmark notes](benchmarks/EventSourcing.Benchmarks/README.md) for met
 See the [aggregate lifecycle and reversal guide](docs/refinement-lifecycle.md),
 [generated-package consumer](validation/PackageConsumer/README.md), and
 [recorded performance baseline](benchmarks/EventSourcing.PerformanceTests/baselines/README.md).
+
+
+## Optional dependency injection composition
+
+Core remains dependency-free and supports the manual dispatcher builder shown above.
+The optional `EventSourcing.DependencyInjection` package registers constructor-injected handlers:
+
+```csharp
+using EventSourcing.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
+
+services.AddSingleton(new ReceiptConfiguration(3));
+services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1", handlers => handlers
+    .AddHandler<Received, ReceiptHandler>(ServiceLifetime.Scoped)
+    .AddHandler<Renamed, RenameHandler>(ServiceLifetime.Scoped));
+
+using var scope = provider.CreateScope();
+var rules = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1");
+var stream = new EventStream<Inventory, InventoryEvent>(id, opening, rules);
+```
+
+The complete example types are in the external-handler integration fixtures. Client integration
+libraries can group setup in `services.AddFamilyHorizonAccounts()`. Different rule versions are
+keyed registrations selected explicitly for replay. Duplicate mappings or rule registrations fail;
+no dispatcher is silently replaced. Scoped lifetimes are the default; enable container scope
+validation. Dispatchers retain their handlers for forward and reverse transitions and reject use
+after their owning scope is disposed. Assembly scanning is not implemented.
+
+See the [adapter guide](src/EventSourcing.DependencyInjection/README.md) for manual composition,
+client-library registration, lifetime requirements, rule-version selection and reversal semantics;
+and the [package-only DI consumer](validation/DependencyInjectionConsumer/README.md) for validation.
