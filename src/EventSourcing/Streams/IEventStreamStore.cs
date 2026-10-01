@@ -7,6 +7,7 @@ namespace EventSourcing.Streams;
 /// </summary>
 public interface IEventStreamStore<TEvent> where TEvent : class, IEvent<TEvent>
 {
+    /// <summary>Read committed history from a consistent storage view.</summary>
     Task<IReadOnlyList<TEvent>> ReadAsync(Guid streamId, CancellationToken cancellationToken = default);
 
     /// <summary>

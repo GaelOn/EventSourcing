@@ -8,13 +8,19 @@ namespace EventSourcing.Streams;
 /// </summary>
 public sealed class StreamSlice<TEvent> where TEvent : class, IEvent<TEvent>
 {
+    /// <summary>Identity of the stream participating in this operation.</summary>
     public Guid StreamId { get; }
+    /// <summary>Exclusive cursor preceding the requested suffix.</summary>
     public long AfterVersion { get; }
+    /// <summary>Current stream position, including pending events.</summary>
     public long Version { get; }
+    /// <summary>Immutable ordered history retained after the snapshot boundary.</summary>
     public IReadOnlyList<TEvent> Events { get; }
+    /// <summary>Earlier event identities retained for duplicate protection across the snapshot boundary.</summary>
     public IReadOnlyCollection<Guid> PriorEventIds { get; }
     internal ImmutableHashSet<Guid> EventIds { get; }
 
+    /// <summary>Validate suffix positions and the complete earlier identity index.</summary>
     public StreamSlice(Guid streamId, long afterVersion, long version,
         IEnumerable<TEvent> events, IEnumerable<Guid> priorEventIds)
     {
@@ -30,7 +36,7 @@ public sealed class StreamSlice<TEvent> where TEvent : class, IEvent<TEvent>
         foreach (var id in priorEventIds)
         {
             if (id == Guid.Empty) throw new InvalidOperationException("An event ID is required.");
-            if (!ids.Add(id)) throw new DuplicateEventException(id);
+            if (!ids.Add(id)) throw new DuplicateEventException(id, streamId);
         }
         if (ids.Count != afterVersion)
             throw new InvalidOperationException("The earlier identity index must cover every event before the suffix.");
@@ -40,7 +46,7 @@ public sealed class StreamSlice<TEvent> where TEvent : class, IEvent<TEvent>
         {
             ArgumentNullException.ThrowIfNull(e);
             if (e.Id == Guid.Empty) throw new InvalidOperationException("An event ID is required.");
-            if (!ids.Add(e.Id)) throw new DuplicateEventException(e.Id);
+            if (!ids.Add(e.Id)) throw new DuplicateEventException(e.Id, streamId);
             EventHistory.ValidatePosition(streamId, e, checked(++position));
         }
         StreamId = streamId;

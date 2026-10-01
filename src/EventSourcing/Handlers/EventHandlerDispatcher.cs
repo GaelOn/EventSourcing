@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using EventSourcing.Streams;
 
 namespace EventSourcing.Handlers;
 
@@ -6,25 +7,41 @@ namespace EventSourcing.Handlers;
 /// An immutable exact-runtime-type handler registry usable as an EventStream reducer.
 /// Live application and replay must use the handler set corresponding to the recorded rule version.
 /// </summary>
-public sealed class EventHandlerDispatcher<TState, TEvent>
+public sealed class EventHandlerDispatcher<TState, TEvent> : IEventReducer<TState, TEvent>
     where TState : class
     where TEvent : class, IEvent<TEvent>
 {
-    private readonly ImmutableDictionary<Type, Func<TState, TEvent, TState>> _handlers;
+    private readonly ImmutableDictionary<Type, Transition> _handlers;
 
-    internal EventHandlerDispatcher(ImmutableDictionary<Type, Func<TState, TEvent, TState>> handlers) =>
+    internal sealed record Transition(Func<TState, TEvent, TState> Do, Func<TState, TEvent, TState> Undo);
+    internal EventHandlerDispatcher(string ruleVersion, ImmutableDictionary<Type, Transition> handlers)
+    {
+        RuleVersion = ruleVersion;
         _handlers = handlers;
+    }
 
-    public static EventHandlerDispatcherBuilder<TState, TEvent> CreateBuilder() => new();
+    /// <inheritdoc />
+    public string RuleVersion { get; }
+
+    /// <summary>Create a startup handler registry for an explicitly identified rule set.</summary>
+    public static EventHandlerDispatcherBuilder<TState, TEvent> CreateBuilder(string ruleVersion) => new(ruleVersion);
 
     /// <summary>Dispatch exactly once; unregistered types and null results are errors.</summary>
-    public TState Reduce(TState state, TEvent @event)
+    public TState Reduce(TState state, TEvent @event) => Do(state, @event);
+
+    /// <summary>Apply exactly one registered forward transition.</summary>
+    public TState Do(TState state, TEvent @event) => Dispatch(state, @event, reverse: false);
+
+    /// <summary>Calculate reversal without changing stream history or pending events.</summary>
+    public TState Undo(TState state, TEvent @event) => Dispatch(state, @event, reverse: true);
+
+    private TState Dispatch(TState state, TEvent @event, bool reverse)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(@event);
         if (!_handlers.TryGetValue(@event.GetType(), out var handle))
             throw new UnhandledEventException(@event.GetType());
-        return handle(state, @event) ?? throw new InvalidOperationException("Event handler returned null state.");
+        return (reverse ? handle.Undo : handle.Do)(state, @event) ?? throw new InvalidOperationException("Event handler returned null state.");
     }
 }
 
@@ -36,9 +53,18 @@ public sealed class EventHandlerDispatcherBuilder<TState, TEvent>
     where TState : class
     where TEvent : class, IEvent<TEvent>
 {
-    private ImmutableDictionary<Type, Func<TState, TEvent, TState>> _handlers =
-        ImmutableDictionary<Type, Func<TState, TEvent, TState>>.Empty;
+    private readonly string _ruleVersion;
+    private ImmutableDictionary<Type, EventHandlerDispatcher<TState, TEvent>.Transition> _handlers =
+        ImmutableDictionary<Type, EventHandlerDispatcher<TState, TEvent>.Transition>.Empty;
 
+    /// <summary>Create a startup builder for one identified business rule set.</summary>
+    public EventHandlerDispatcherBuilder(string ruleVersion)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ruleVersion);
+        _ruleVersion = ruleVersion;
+    }
+
+    /// <summary>Register exactly one pure forward and reverse handler for a concrete event type.</summary>
     public EventHandlerDispatcherBuilder<TState, TEvent> Register<THandledEvent>(
         IEventHandler<TState, THandledEvent> handler) where THandledEvent : class, TEvent
     {
@@ -46,9 +72,11 @@ public sealed class EventHandlerDispatcherBuilder<TState, TEvent>
         var type = typeof(THandledEvent);
         if (_handlers.ContainsKey(type))
             throw new ArgumentException($"A handler is already registered for '{type.FullName}'.", nameof(handler));
-        _handlers = _handlers.Add(type, (state, @event) => handler.Handle(state, (THandledEvent)@event));
+        _handlers = _handlers.Add(type, new((state, @event) => handler.Do(state, (THandledEvent)@event),
+            (state, @event) => handler.Undo(state, (THandledEvent)@event)));
         return this;
     }
 
-    public EventHandlerDispatcher<TState, TEvent> Build() => new(_handlers);
+    /// <summary>Freeze the current registrations into an immutable dispatcher.</summary>
+    public EventHandlerDispatcher<TState, TEvent> Build() => new(_ruleVersion, _handlers);
 }

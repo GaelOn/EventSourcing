@@ -6,6 +6,7 @@ public sealed class InMemorySnapshotStore<TState> : ISnapshotStore<TState> where
     private readonly object _gate = new();
     private readonly Dictionary<(Guid Id, string Rules, int Schema), AggregateSnapshot<TState>> _snapshots = [];
 
+    /// <summary>Read committed history from a consistent storage view.</summary>
     public Task<AggregateSnapshot<TState>?> ReadAsync(Guid aggregateId, string ruleVersion, int schemaVersion,
         CancellationToken cancellationToken = default)
     {
@@ -19,6 +20,7 @@ public sealed class InMemorySnapshotStore<TState> : ISnapshotStore<TState> where
         }
     }
 
+    /// <summary>Commit pending events atomically; return a saved view without changing the original on success or failure.</summary>
     public Task SaveAsync(AggregateSnapshot<TState> snapshot, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshot);

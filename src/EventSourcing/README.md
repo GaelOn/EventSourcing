@@ -18,6 +18,17 @@ Derive a business root from it, pass an immutable stream to its constructor, exp
 
 `State` must contain the complete immutable data needed to restore the root and every owned entity. Do not snapshot a live root with services, storage references, reducers, or callbacks. `AggregateSnapshotTests` demonstrates root name, account entities, currency, and balance surviving file-backed restoration without replaying old events.
 
+## Refinements in 0.1.0-alpha.5
+
+- Handlers implement pure `Do` and `Undo`. `Handle` forwards to `Do`; previous implementations must provide both transitions. Events carry reversal data, including previous values for replacements. Validate domain preconditions and test immediate reversal. Pure reversal does not edit any stream; persisted cancellation appends a new compensating event and retains history.
+- `IEventReducer` binds `RuleVersion` to a calculation. `EventReducer` wraps a pure delegate; the dispatcher implements the same interface and requires a rule version at construction. Pass the calculation object to streams and versioned replay/load overloads rather than detaching its delegate.
+- Snapshot capture with `CaptureSnapshot(schemaVersion)` derives the bound identity. Explicit labels cannot relabel a bound stream. Low-level unbound delegate/string APIs remain for compatibility; automatic capture on an unbound stream fails. Rule identities include handler configuration and must be assigned honestly by the application.
+- Public aggregate `Stream` access is intentional for immutable branching, batching, and composition. Business operations are the application's normal entry point; applications requiring restricted access supply their own façade. `HistoryStartVersion`, `PendingEvents`, `HasPendingChanges`, and `RuleVersion` expose lifecycle state.
+- Clone validation rejects a changed concrete type before reduction. Exceptions expose event IDs, expected/actual versions, stream IDs, rule identities, schema versions, and clone types for structured diagnostics.
+- NuGet packages include XML API documentation. The separate BenchmarkDotNet project measures time and allocations; it does not add dependencies to core or timing assertions to correctness CI.
+
+See the [complete lifecycle contracts](../../docs/refinement-lifecycle.md) and [performance methodology](../../benchmarks/EventSourcing.PerformanceTests/README.md). The heterogeneous JSON test adapter demonstrates stable event discriminators and payload versions; unsupported formats fail explicitly. It remains a test fixture.
+
 ## Migration to 0.1.0-alpha.3
 
 - `EventSourcedAggregate<TState, TEvent>`, `IAggregate`, `IEntity`, and `IEventSourcedAggregate` are core business abstractions in `EventSourcing.ObjectsAggregation`.
@@ -50,15 +61,15 @@ History uses structurally shared immutable lists and identity sets. `Apply` no l
 
 ## Typed event handlers
 
-`EventSourcing.Handlers.IEventHandler<TState, TEvent>` expresses a pure state transition through `TState Handle(TState state, TEvent @event)`. Use composition to give an aggregate several typed handlers, or implement several interfaces on one business object. Each handler must use its supplied state rather than reading a captured root instance.
+`EventSourcing.Handlers.IEventHandler<TState, TEvent>` expresses a pure state transition through `TState Do(TState state, TEvent @event)` and `TState Undo(TState state, TEvent @event)`. Use composition to give an aggregate several typed handlers, or implement several interfaces on one business object. Each handler must use its supplied state rather than reading a captured root instance.
 
 ```csharp
-var dispatcher = EventHandlerDispatcher<InventoryState, WarehouseEvent>.CreateBuilder()
+var dispatcher = EventHandlerDispatcher<InventoryState, WarehouseEvent>.CreateBuilder("warehouse/v1")
     .Register<StockReceived>(receivedHandler)
     .Register<StockShipped>(shippedHandler)
     .Build();
 var stream = new EventStream<InventoryState, WarehouseEvent>(
-    aggregateId, openingState, dispatcher.Reduce);
+    aggregateId, openingState, dispatcher);
 ```
 
 Import `EventSourcing.Handlers`. Concrete events derive from the common stream event type and preserve their runtime type, identity, and payload in `Clone`. See the [repository README](../../README.md#compose-typed-event-handlers) for complete types and registration examples.
@@ -81,7 +92,8 @@ An event stream alone is not a complete persisted scenario. Its opening inputs a
 
 ```csharp
 var definition = new ReplayDefinition<Balance>(new Balance(100m), "balance/v1");
-var live = new EventStream<Balance, LedgerEvent>(streamId, definition.OpeningState, ReduceBalanceV1);
+var live = new EventStream<Balance, LedgerEvent>(streamId, definition.OpeningState,
+    new EventReducer<Balance, LedgerEvent>("balance/v1", ReduceBalanceV1));
 // The application saves definition and history together under streamId, then reloads both.
 var replayed = EventStream<Balance, LedgerEvent>.Replay(
     streamId, storedDefinition, "balance/v1", ReduceBalanceV1, storedHistory);
@@ -101,7 +113,7 @@ Capture from a saved root or stream with no pending events. Capture rejects pend
 
 ```csharp
 var savedRoot = await changedRoot.SaveAsync(eventStore); // Typed wrapper supplied by the business root.
-await savedRoot.SaveSnapshotAsync(snapshotStore, "household/v1", 1);
+await savedRoot.SaveSnapshotAsync(snapshotStore, 1);
 // If checkpoint saving fails, savedRoot and the committed event ledger remain valid.
 ```
 
@@ -111,7 +123,8 @@ Load from a compatible checkpoint and apply only its later committed events:
 
 ```csharp
 var restoredStream = await EventStream<HouseholdState, HouseholdEvent>.LoadAsync(
-    aggregateId, storedOpeningDefinition, "household/v1", 1, ReduceHouseholdV1,
+    aggregateId, storedOpeningDefinition, 1,
+    new EventReducer<HouseholdState, HouseholdEvent>("household/v1", ReduceHouseholdV1),
     eventStore, snapshotStore, cancellationToken);
 var restoredRoot = new HouseholdAggregate(restoredStream);
 ```
@@ -171,10 +184,10 @@ dotnet build EventSourcing.slnx -c Release
 dotnet test EventSourcing.slnx -c Release --no-build
 ```
 
-Packages are written to the repository's ignored `artifacts/packages/` directory. The package IDs are `EventSourcing` and `EventSourcing.Compatibility`; both default to `0.1.0-alpha.4`. Release builds also generate portable-symbol `.snupkg` packages. Override the version when creating another release:
+Packages are written to the repository's ignored `artifacts/packages/` directory. The package IDs are `EventSourcing` and `EventSourcing.Compatibility`; both default to `0.1.0-alpha.5`. Release builds also generate portable-symbol `.snupkg` packages. Override the version when creating another release:
 
 ```sh
-dotnet build EventSourcing.slnx -c Release -p:Version=0.1.0-alpha.5
+dotnet build EventSourcing.slnx -c Release -p:Version=0.1.0-alpha.6
 ```
 
 To package an already built Release library explicitly:

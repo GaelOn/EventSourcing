@@ -1,14 +1,9 @@
 namespace EventSourcing.Streams;
 
-public sealed class DuplicateEventException(Guid id)
-    : InvalidOperationException($"Event '{id}' is already present in this stream.");
-
-public sealed class StreamConcurrencyException(long expected, long actual)
-    : InvalidOperationException($"Expected stream version {expected}, but storage is at version {actual}.");
-
 /// <summary>Shared validation for replay and persistence adapters. Order is stream order, not effective date.</summary>
 public static class EventHistory
 {
+    /// <summary>Validate stream order, metadata and unique nonempty event identities before replay.</summary>
     public static void Validate<TEvent>(Guid streamId, IEnumerable<TEvent> events)
         where TEvent : class, IEvent<TEvent>
     {
@@ -20,7 +15,7 @@ public static class EventHistory
         {
             ArgumentNullException.ThrowIfNull(@event);
             if (@event.Id == Guid.Empty) throw new InvalidOperationException("An event ID is required.");
-            if (!ids.Add(@event.Id)) throw new DuplicateEventException(@event.Id);
+            if (!ids.Add(@event.Id)) throw new DuplicateEventException(@event.Id, streamId);
             ValidatePosition(streamId, @event, checked(++version));
         }
     }
@@ -46,6 +41,8 @@ public static class EventHistory
         var tagged = @event.Clone(metadata);
         if (tagged is null || tagged.Id != @event.Id || tagged.Metadata != metadata)
             throw new InvalidOperationException("Cloning must preserve event identity and assign the requested metadata.");
+        if (tagged.GetType() != @event.GetType())
+            throw new EventCloneException(@event.Id, streamId, @event.GetType(), tagged.GetType());
         return tagged;
     }
 }

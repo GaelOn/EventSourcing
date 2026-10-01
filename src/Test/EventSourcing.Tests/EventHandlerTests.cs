@@ -15,7 +15,7 @@ public sealed class EventHandlerTests
     public async Task Typed_handlers_produce_the_same_business_state_live_on_replay_and_after_a_snapshot()
     {
         var handler = new StockHandlers();
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder()
+        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
             .Register<Received>(handler).Register<Shipped>(handler).Build();
         var opening = new Stock(10);
         var store = new InMemoryEventStreamStore<StockEvent>();
@@ -43,7 +43,7 @@ public sealed class EventHandlerTests
     [Fact]
     public async Task Business_root_composes_handlers_and_rejected_events_never_reach_storage()
     {
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder()
+        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
             .Register<Received>(new StockHandlers()).Build();
         var root = new StockRoot(new EventStream<Stock, StockEvent>(StreamId, new Stock(10), dispatcher.Reduce));
         var store = new InMemoryEventStreamStore<StockEvent>();
@@ -59,7 +59,7 @@ public sealed class EventHandlerTests
     [Fact]
     public void Duplicate_registration_is_rejected_and_does_not_replace_the_handler()
     {
-        var builder = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder()
+        var builder = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
             .Register<Received>(new StockHandlers());
         Assert.Throws<ArgumentException>(() => builder.Register<Received>(new StockHandlers()));
         Assert.Equal(new Stock(15), builder.Build().Reduce(new Stock(10), new Received(FirstId, 5)));
@@ -68,7 +68,7 @@ public sealed class EventHandlerTests
     [Fact]
     public void Built_dispatcher_is_unaffected_by_later_builder_registration()
     {
-        var builder = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder()
+        var builder = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
             .Register<Received>(new StockHandlers());
         var first = builder.Build();
         builder.Register<Shipped>(new StockHandlers());
@@ -80,7 +80,7 @@ public sealed class EventHandlerTests
     [Fact]
     public void Dispatch_uses_exact_runtime_type_and_never_silently_ignores_an_event()
     {
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder()
+        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
             .Register<StockEvent>(new FallbackHandler()).Build();
         var stream = new EventStream<Stock, StockEvent>(StreamId, new Stock(10), dispatcher.Reduce);
         var error = Assert.Throws<UnhandledEventException>(() => stream.Apply(new Received(FirstId, 5)));
@@ -92,7 +92,7 @@ public sealed class EventHandlerTests
     [Fact]
     public void Business_failure_preserves_the_original_branch()
     {
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder()
+        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
             .Register<Shipped>(new StockHandlers()).Build();
         var stream = new EventStream<Stock, StockEvent>(StreamId, new Stock(1), dispatcher.Reduce);
         Assert.Throws<InvalidOperationException>(() => stream.Apply(new Shipped(FirstId, 2)));
@@ -104,7 +104,7 @@ public sealed class EventHandlerTests
     [Fact]
     public void Null_arguments_and_null_handler_results_are_rejected()
     {
-        var builder = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder();
+        var builder = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1");
         Assert.Throws<ArgumentNullException>(() => builder.Register<Received>(null!));
         var dispatcher = builder.Register<Received>(new NullHandler()).Build();
         Assert.Throws<ArgumentNullException>(() => dispatcher.Reduce(null!, new Received(FirstId, 1)));
@@ -115,7 +115,7 @@ public sealed class EventHandlerTests
     [Fact]
     public void Immutable_dispatcher_can_reduce_independent_states_concurrently()
     {
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder()
+        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
             .Register<Received>(new StockHandlers()).Build();
         Parallel.For(0, 100, i => Assert.Equal(new Stock(i + 5),
             dispatcher.Reduce(new Stock(i), new Received(FirstId, 5))));
@@ -144,16 +144,20 @@ public sealed class EventHandlerTests
     }
     private sealed class StockHandlers : IEventHandler<Stock, Received>, IEventHandler<Stock, Shipped>
     {
-        public Stock Handle(Stock state, Received e) => new(checked(state.Quantity + e.Quantity));
-        public Stock Handle(Stock state, Shipped e) => state.Quantity < e.Quantity
+        public Stock Do(Stock state, Received e) => new(checked(state.Quantity + e.Quantity));
+        public Stock Undo(Stock state, Received e) => new(checked(state.Quantity - e.Quantity));
+        public Stock Undo(Stock state, Shipped e) => new(checked(state.Quantity + e.Quantity));
+        public Stock Do(Stock state, Shipped e) => state.Quantity < e.Quantity
             ? throw new InvalidOperationException("Insufficient stock.") : new(state.Quantity - e.Quantity);
     }
     private sealed class FallbackHandler : IEventHandler<Stock, StockEvent>
     {
-        public Stock Handle(Stock state, StockEvent e) => state;
+        public Stock Do(Stock state, StockEvent e) => state;
+        public Stock Undo(Stock state, StockEvent e) => state;
     }
     private sealed class NullHandler : IEventHandler<Stock, Received>
     {
-        public Stock Handle(Stock state, Received e) => null!;
+        public Stock Do(Stock state, Received e) => null!;
+        public Stock Undo(Stock state, Received e) => null!;
     }
 }

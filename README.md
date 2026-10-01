@@ -24,11 +24,11 @@ Only `CallbackEventSourcedAggregate` in the compatibility package is obsolete. I
 
 ## Installation
 
-The current prerelease is `0.1.0-alpha.4`. Build the packages locally, then reference core from your configured local feed:
+The current prerelease is `0.1.0-alpha.5`. Build the packages locally, then reference core from your configured local feed:
 
 ```sh
 dotnet build EventSourcing.slnx -c Release
-dotnet add YourApp.csproj package EventSourcing --version 0.1.0-alpha.4 --source ./artifacts/packages
+dotnet add YourApp.csproj package EventSourcing --version 0.1.0-alpha.5 --source ./artifacts/packages
 ```
 
 Add `EventSourcing.Compatibility` only if you need the legacy callback API. Packages and portable symbols are generated in `artifacts/packages/`; no package-feed publication is configured.
@@ -63,6 +63,8 @@ public sealed class StockChanged : EventBase<StockChanged>
 public static class InventoryRules
 {
     public const string Version = "inventory/v1";
+    public static EventReducer<InventoryState, StockChanged> Reducer { get; } =
+        new(Version, Reduce);
 
     public static InventoryState Reduce(InventoryState state, StockChanged e)
     {
@@ -89,7 +91,7 @@ var definition = new ReplayDefinition<InventoryState>(opening, InventoryRules.Ve
 var store = new InMemoryEventStreamStore<StockChanged>();
 
 var original = new EventStream<InventoryState, StockChanged>(
-    inventoryId, opening, InventoryRules.Reduce);
+    inventoryId, opening, InventoryRules.Reducer);
 var changed = original.Apply(new StockChanged(receiptId, +5));
 // original: quantity 10, version 0.
 // changed: quantity 15, version 1, persisted version 0, one pending event.
@@ -107,7 +109,7 @@ Saving checks `PersistedVersion` against storage. A competing writer causes `Str
 ```csharp
 var history = await store.ReadAsync(inventoryId);
 var replayed = EventStream<InventoryState, StockChanged>.Replay(
-    inventoryId, definition, InventoryRules.Version, InventoryRules.Reduce, history);
+    inventoryId, definition, InventoryRules.Reducer, history);
 // quantity 15; no pending events and no storage or side-effect callbacks during replay.
 ```
 
@@ -147,7 +149,7 @@ Business invariants belong in the root and reducer. `State` must contain all imm
 
 ## Compose typed event handlers
 
-For aggregates sensitive to several event types, implement `IEventHandler<TState, TEvent>` for each transition and compose them through `EventHandlerDispatcher<TState, TEvent>`. The dispatcher supplies the stream's reducer; live updates, replay, and snapshot restoration follow the same business rules.
+For aggregates sensitive to several event types, implement `IEventHandler<TState, TEvent>` with pure `Do` and `Undo` methods for each transition and compose them through `EventHandlerDispatcher<TState, TEvent>`. The dispatcher supplies the stream's reducer; live updates, replay, and snapshot restoration follow the same business rules.
 
 This alternative inventory example uses the `InventoryState` defined above and a common event base. Concrete events must preserve their runtime type, identity, and payload when cloned:
 
@@ -182,33 +184,45 @@ public sealed class StockShipped(Guid id, int quantity, EventMetadata? metadata 
 
 public sealed class StockReceivedHandler : IEventHandler<InventoryState, StockReceived>
 {
-    public InventoryState Handle(InventoryState state, StockReceived e) =>
+    public InventoryState Do(InventoryState state, StockReceived e) =>
         state with { Item = state.Item with
         { Quantity = checked(state.Item.Quantity + e.Quantity) } };
+
+    public InventoryState Undo(InventoryState state, StockReceived e)
+    {
+        if (state.Item.Quantity < e.Quantity)
+            throw new InvalidOperationException("Received stock is no longer available for reversal.");
+        return state with { Item = state.Item with
+        { Quantity = state.Item.Quantity - e.Quantity } };
+    }
 }
 
 public sealed class StockShippedHandler : IEventHandler<InventoryState, StockShipped>
 {
-    public InventoryState Handle(InventoryState state, StockShipped e)
+    public InventoryState Do(InventoryState state, StockShipped e)
     {
         if (e.Quantity > state.Item.Quantity)
             throw new InvalidOperationException("Insufficient stock.");
         return state with { Item = state.Item with
         { Quantity = state.Item.Quantity - e.Quantity } };
     }
+
+    public InventoryState Undo(InventoryState state, StockShipped e) =>
+        state with { Item = state.Item with
+        { Quantity = checked(state.Item.Quantity + e.Quantity) } };
 }
 ```
 
 Register handlers in application startup code:
 
 ```csharp
-var dispatcher = EventHandlerDispatcher<InventoryState, WarehouseEvent>.CreateBuilder()
+var dispatcher = EventHandlerDispatcher<InventoryState, WarehouseEvent>.CreateBuilder("warehouse/v1")
     .Register<StockReceived>(new StockReceivedHandler())
     .Register<StockShipped>(new StockShippedHandler())
     .Build();
 
 var typedStream = new EventStream<InventoryState, WarehouseEvent>(
-    inventoryId, opening, dispatcher.Reduce);
+    inventoryId, opening, dispatcher);
 var typedShipmentId = Guid.Parse("33333333-3333-3333-3333-333333333333");
 var updatedInventory = typedStream
     .Apply(new StockReceived(receiptId, 5))
@@ -224,9 +238,10 @@ For dependency injection, register instances resolved by your application's cont
 public static class WarehouseHandlers
 {
     public static EventHandlerDispatcher<InventoryState, WarehouseEvent> Create(
+        string ruleVersion,
         IEventHandler<InventoryState, StockReceived> received,
         IEventHandler<InventoryState, StockShipped> shipped) =>
-        EventHandlerDispatcher<InventoryState, WarehouseEvent>.CreateBuilder()
+        EventHandlerDispatcher<InventoryState, WarehouseEvent>.CreateBuilder(ruleVersion)
             .Register<StockReceived>(received)
             .Register<StockShipped>(shipped)
             .Build();
@@ -239,6 +254,27 @@ Dispatch matches the **exact runtime type**. A base-type handler is not a catch-
 
 Each `Build()` captures an immutable registration map. Later builder changes cannot alter an existing dispatcher; the builder itself is for single-threaded startup use. Handler instances are retained rather than cloned: keep them pure, reentrant, and free of mutable or disposed dependencies. No commands, external effects, or asynchronous I/O belong in these state transitions.
 
+## Reversal, rule identity, and aggregate lifecycle
+
+`Do` and `Undo` are pure transitions. For valid inputs, immediate reversal must satisfy `Undo(Do(state, event), event) == state`. Reversal after intervening changes is subject to domain preconditions and may fail. Replacement events must retain the previous value; their handlers should verify the current value before applying or reversing the replacement.
+
+```csharp
+var shipment = new StockShipped(typedShipmentId, 2);
+var afterShipping = dispatcher.Do(opening, shipment);
+var beforeShipping = dispatcher.Undo(afterShipping, shipment);
+// beforeShipping equals opening; neither input was mutated.
+```
+
+Calling dispatcher `Undo` does not change a stream, erase history, or save anything. **Persisted business cancellation appends a new compensating event with a new caller-supplied ID and preserves the original event.** The business event should carry any required reversal data and causal reference. For example, cancelling a shipment can append a stock receipt, subject to the aggregate's cancellation rules.
+
+Pass the dispatcher itself to a stream, or bind a delegate with `new EventReducer<TState, TEvent>(ruleVersion, reduce)`. Both implement `IEventReducer`, associating the mechanism with its immutable `RuleVersion`. This identity survives application, saving, full replay, and snapshot restoration. `CaptureSnapshot(schemaVersion)` and `SaveSnapshotAsync(store, schemaVersion)` derive it automatically. A bound stream rejects an explicit conflicting rule label. Rule identities remain application declarations: the library cannot prove implementation equivalence.
+
+The aggregate exposes `Version`, `PersistedVersion`, `HistoryStartVersion`, `RuleVersion`, `PendingEvents`, and `HasPendingChanges`. Save returns a new view with no pending changes. Snapshot capture requires committed state; restored `Events` is only the suffix after `HistoryStartVersion`.
+
+Public `Stream` access is intentional for scenario calculation, atomic batching, and composition. `Stream.Apply()` returns an independent branch and cannot mutate its containing root. Business operations should be the application's normal entry point, with invariants also enforced by its handlers/reducer. Applications needing a restricted API can expose their own façade; the generic root is not an authorization boundary.
+
+Migration to `0.1.0-alpha.5`: handler implementations now require `Do` and `Undo`; `Handle` is a forwarding alias. Dispatcher builders require a rule version. Existing delegate/string stream overloads remain as low-level compatibility APIs; unbound delegates cannot derive snapshot identity automatically. Prefer the versioned overloads for new persisted aggregates. See the [lifecycle and reversal contracts](docs/refinement-lifecycle.md).
+
 ## Snapshot and restore
 
 A snapshot is a checkpoint of complete business state plus its committed stream position. Save pending events first:
@@ -246,14 +282,14 @@ A snapshot is a checkpoint of complete business state plus its committed stream 
 ```csharp
 var snapshots = new InMemorySnapshotStore<InventoryState>();
 var root = new InventoryAggregate(saved);
-await root.SaveSnapshotAsync(snapshots, InventoryRules.Version, schemaVersion: 1);
+await root.SaveSnapshotAsync(snapshots, schemaVersion: 1);
 // Checkpoint: quantity 15 at stream version 1, including warehouse name and item.
 
 var shipmentId = Guid.Parse("33333333-3333-3333-3333-333333333333");
 var afterShipment = await root.ChangeStock(shipmentId, -2).SaveAsync(store);
 
 var restored = await EventStream<InventoryState, StockChanged>.LoadAsync(
-    inventoryId, definition, InventoryRules.Version, 1, InventoryRules.Reduce,
+    inventoryId, definition, 1, InventoryRules.Reducer,
     store, snapshots);
 var restoredRoot = new InventoryAggregate(restored);
 // quantity 13, version 2, HistoryStartVersion 1; only the shipment was reduced.
@@ -274,7 +310,7 @@ var branchId = Guid.Parse("44444444-4444-4444-4444-444444444444");
 var transferId = Guid.Parse("55555555-5555-5555-5555-555555555555");
 var branch = new EventStream<InventoryState, StockChanged>(
     branchId, new InventoryState("Branch", new StockItem("BOOK", 0)),
-    InventoryRules.Reduce);
+    InventoryRules.Reducer);
 
 var participants = await EventStreamBatch.SaveAsync(store, new[]
 {
@@ -301,12 +337,11 @@ var slices = await store.ReadBatchFromAsync(new[]
     new StreamReadRequest(branchId, 0)
 });
 var restoredMain = EventStream<InventoryState, StockChanged>.Replay(
-    checkpoint, InventoryRules.Version, 1, InventoryRules.Reduce,
+    checkpoint, 1, InventoryRules.Reducer,
     slices[inventoryId]);
 var restoredBranch = EventStream<InventoryState, StockChanged>.Replay(
     branchId, new ReplayDefinition<InventoryState>(branch.State, InventoryRules.Version),
-    InventoryRules.Version, InventoryRules.Reduce,
-    slices[branchId].Events);
+    InventoryRules.Reducer, slices[branchId].Events);
 ```
 
 Independent `LoadAsync` calls can observe different commits. Batch reads bring participants to one consistent view even when their checkpoints have different versions. Atomicity covers one store's transaction boundary; cross-database transactions are not provided.
@@ -331,7 +366,13 @@ dotnet test EventSourcing.slnx --no-build
 
 GitHub Actions builds Release with warnings as errors, runs tests, and uploads NuGet packages, portable symbols, and TRX results. Package artifacts are retained for 30 days and test results for 14 days. Download them from the workflow run; no feed publication is configured.
 
-For the dependency-free performance diagnostic:
+Performance measurements use the dedicated BenchmarkDotNet project, independently of correctness tests:
+
+```sh
+dotnet run --project benchmarks/EventSourcing.PerformanceTests -c Release -- --filter '*'
+```
+
+See the [performance methodology and baseline](benchmarks/EventSourcing.PerformanceTests/README.md). The older dependency-free diagnostic remains available:
 
 ```sh
 dotnet build EventSourcing.slnx -c Release

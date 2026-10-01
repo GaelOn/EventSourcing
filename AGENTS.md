@@ -20,3 +20,7 @@
 - Restore related roots from one consistent `ReadBatchFromAsync` result. Individual snapshot loads do not provide a consistent household view. Retain reconciliation, stale-write, failure, cancellation, and concurrency tests for snapshots and range reads.
 
 - Typed state handlers are pure, reentrant transitions selected by exact runtime event type. Freeze dispatcher registrations, reject duplicates/missing handlers, and include handler configuration in the replay rule version. Core does not depend on a DI framework or implement command dispatch.
+
+- Handlers provide pure Do/Undo transitions and enforce reversal preconditions. Immediate reversal restores the input state. Persisted cancellation appends a new compensating event; never remove history.
+- Prefer IEventReducer/identified dispatchers and automatic snapshot identity. Preserve bound rules through every stream lifecycle operation. Public Stream access intentionally supports immutable branching; application façades restrict business entry points when needed.
+- BenchmarkDotNet lives only in EventSourcing.PerformanceTests. Setup/IDs and correctness assertions stay outside measured operations; benchmarks run separately from correctness CI without timing thresholds.

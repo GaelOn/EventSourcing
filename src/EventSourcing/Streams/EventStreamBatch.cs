@@ -3,6 +3,7 @@ namespace EventSourcing.Streams;
 /// <summary>Save related immutable streams through one atomic storage operation.</summary>
 public static class EventStreamBatch
 {
+    /// <summary>Commit pending events atomically; return a saved view without changing the original on success or failure.</summary>
     public static async Task<IReadOnlyList<EventStream<TState, TEvent>>> SaveAsync<TState, TEvent>(
         IAtomicEventStreamStore<TEvent> store, IEnumerable<EventStream<TState, TEvent>> streams,
         CancellationToken cancellationToken = default)

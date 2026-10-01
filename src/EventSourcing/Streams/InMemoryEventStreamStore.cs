@@ -18,13 +18,16 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
         public static StoredStream Empty { get; } = new(ImmutableList<TEvent>.Empty, ImmutableHashSet<Guid>.Empty);
     }
 
+    /// <summary>Read committed history from a consistent storage view.</summary>
     public async Task<IReadOnlyList<TEvent>> ReadAsync(Guid streamId, CancellationToken cancellationToken = default)
         => (await ReadBatchAsync(new[] { streamId }, cancellationToken))[streamId];
 
+    /// <summary>Read a committed suffix and earlier identities from one consistent view.</summary>
     public async Task<StreamSlice<TEvent>> ReadFromAsync(Guid streamId, long afterVersion,
         CancellationToken cancellationToken = default) =>
         (await ReadBatchFromAsync(new[] { new StreamReadRequest(streamId, afterVersion) }, cancellationToken))[streamId];
 
+    /// <summary>Read suffixes and earlier identities for all participants from one consistent view.</summary>
     public Task<IReadOnlyDictionary<Guid, StreamSlice<TEvent>>> ReadBatchFromAsync(
         IReadOnlyList<StreamReadRequest> requests, CancellationToken cancellationToken = default)
     {
@@ -44,7 +47,7 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
             {
                 var stored = _streams.GetValueOrDefault(request.StreamId) ?? StoredStream.Empty;
                 if (request.AfterVersion > stored.History.Count)
-                    throw new StreamConcurrencyException(request.AfterVersion, stored.History.Count);
+                    throw new StreamConcurrencyException(request.AfterVersion, stored.History.Count, request.StreamId);
                 var offset = checked((int)request.AfterVersion);
                 result.Add(request.StreamId, new(request.StreamId, request.AfterVersion, stored.History.Count,
                     stored.History.GetRange(offset, stored.History.Count - offset),
@@ -55,6 +58,7 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
         }
     }
 
+    /// <summary>Read all requested streams from one consistent storage view.</summary>
     public Task<IReadOnlyDictionary<Guid, IReadOnlyList<TEvent>>> ReadBatchAsync(IReadOnlyList<Guid> streamIds,
         CancellationToken cancellationToken = default)
     {
@@ -71,10 +75,12 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
         }
     }
 
+    /// <summary>Atomically validate expected version and identities before appending the complete event batch.</summary>
     public Task AppendAsync(Guid streamId, long expectedVersion, IReadOnlyList<TEvent> events,
         CancellationToken cancellationToken = default) =>
         AppendBatchAsync(new[] { new StreamAppend<TEvent>(streamId, expectedVersion, events) }, cancellationToken);
 
+    /// <summary>Atomically validate every participant and commit all appends or none.</summary>
     public Task AppendBatchAsync(IReadOnlyList<StreamAppend<TEvent>> appends,
         CancellationToken cancellationToken = default)
     {
@@ -94,7 +100,7 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
             {
                 var stored = _streams.GetValueOrDefault(append.StreamId) ?? StoredStream.Empty;
                 if (stored.History.Count != append.ExpectedVersion)
-                    throw new StreamConcurrencyException(append.ExpectedVersion, stored.History.Count);
+                    throw new StreamConcurrencyException(append.ExpectedVersion, stored.History.Count, append.StreamId);
                 var eventIds = stored.EventIds.ToBuilder();
                 var version = append.ExpectedVersion;
                 // Stored history was validated before publication. Only the new suffix needs validation.
@@ -102,7 +108,7 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
                 {
                     ArgumentNullException.ThrowIfNull(e);
                     if (e.Id == Guid.Empty) throw new InvalidOperationException("An event ID is required.");
-                    if (!eventIds.Add(e.Id)) throw new DuplicateEventException(e.Id);
+                    if (!eventIds.Add(e.Id)) throw new DuplicateEventException(e.Id, append.StreamId);
                     EventHistory.ValidatePosition(append.StreamId, e, checked(++version));
                 }
                 next[append.StreamId] = new(stored.History.AddRange(append.Events), eventIds.ToImmutable());

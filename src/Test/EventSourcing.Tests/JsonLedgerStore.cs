@@ -34,7 +34,7 @@ internal sealed class JsonLedgerStore(string path) : IAtomicEventStreamStore<Led
         {
             var history = streams.GetValueOrDefault(request.StreamId) ?? Array.Empty<LedgerEvent>();
             if (request.AfterVersion > history.Count)
-                throw new StreamConcurrencyException(request.AfterVersion, history.Count);
+                throw new StreamConcurrencyException(request.AfterVersion, history.Count, request.StreamId);
             var offset = checked((int)request.AfterVersion);
             result.Add(request.StreamId, new(request.StreamId, request.AfterVersion, history.Count,
                 history.Skip(offset), history.Take(offset).Select(e => e.Id)));
@@ -77,7 +77,7 @@ internal sealed class JsonLedgerStore(string path) : IAtomicEventStreamStore<Led
             {
                 var stored = streams.GetValueOrDefault(append.StreamId) ?? Array.Empty<LedgerEvent>();
                 if (stored.Count != append.ExpectedVersion)
-                    throw new StreamConcurrencyException(append.ExpectedVersion, stored.Count);
+                    throw new StreamConcurrencyException(append.ExpectedVersion, stored.Count, append.StreamId);
                 var combined = stored.Concat(append.Events).ToArray();
                 EventHistory.Validate(append.StreamId, combined);
                 streams[append.StreamId] = Array.AsReadOnly(combined);
