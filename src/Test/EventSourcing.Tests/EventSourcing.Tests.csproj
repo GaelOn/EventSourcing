@@ -16,5 +16,6 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <ProjectReference Include="../../EventSourcing/EventSourcing.csproj" />
+    <ProjectReference Include="../../EventSourcing.Compatibility/EventSourcing.Compatibility.csproj" />
   </ItemGroup>
 </Project>

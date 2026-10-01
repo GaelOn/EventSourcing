@@ -142,26 +142,37 @@ public sealed class MultiStreamTests : IDisposable
         var store = Store(file);
         var source = Open(Source, 100m);
         var destination = Open(Destination, 0m);
+        using var phase = new Barrier(2);
         var writer = Task.Run(async () =>
         {
             for (var i = 0; i < 50; i++)
             {
+                Assert.True(phase.SignalAndWait(TimeSpan.FromSeconds(10)), "Reader did not reach the write phase.");
                 var id = Guid.NewGuid();
                 var saved = await EventStreamBatch.SaveAsync(store, new[] {
                     source.Apply(new LedgerEvent(id, -1m)), destination.Apply(new LedgerEvent(id, 1m)) });
                 source = saved[0];
                 destination = saved[1];
-                await Task.Yield();
+                Assert.True(phase.SignalAndWait(TimeSpan.FromSeconds(10)), "Reader did not finish its concurrent read.");
             }
         });
-        for (var i = 0; i < 100; i++)
+        var reader = Task.Run(async () =>
         {
-            var history = await store.ReadBatchAsync(new[] { Source, Destination });
-            Assert.Equal(history[Source].Count, history[Destination].Count);
-            Assert.Equal(0m, history.Values.SelectMany(events => events).Sum(e => e.Amount));
-            await Task.Yield();
-        }
-        await writer;
+            for (var i = 0; i < 50; i++)
+            {
+                Assert.True(phase.SignalAndWait(TimeSpan.FromSeconds(10)), "Writer did not reach the read phase.");
+                var concurrent = await store.ReadBatchAsync(new[] { Source, Destination });
+                Assert.Equal(concurrent[Source].Count, concurrent[Destination].Count);
+                Assert.Equal(0m, concurrent.Values.SelectMany(events => events).Sum(e => e.Amount));
+                Assert.True(phase.SignalAndWait(TimeSpan.FromSeconds(10)), "Writer did not finish its commit.");
+                // Every round must observe progress, so the test cannot pass by sampling only an empty ledger.
+                var committed = await store.ReadBatchAsync(new[] { Source, Destination });
+                Assert.Equal(i + 1, committed[Source].Count);
+                Assert.Equal(i + 1, committed[Destination].Count);
+                Assert.Equal(0m, committed.Values.SelectMany(events => events).Sum(e => e.Amount));
+            }
+        });
+        await Task.WhenAll(writer, reader);
         Assert.Equal(50, (await store.ReadAsync(Source)).Count);
     }
 
@@ -197,6 +208,43 @@ public sealed class MultiStreamTests : IDisposable
             Open(Source, 100m).Apply(new LedgerEvent(Guid.NewGuid(), -1m)),
             Open(Destination, 0m).Apply(new LedgerEvent(Guid.NewGuid(), 1m)) });
         Assert.All(snapshot.Values, Assert.Empty);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Nonempty_read_snapshots_keep_their_history_after_later_commits(bool file)
+    {
+        var store = Store(file);
+        var saved = await Open(Source, 100m).HandleAsync(new LedgerEvent(StreamTests.FirstId, 25m), store);
+        var snapshot = await store.ReadAsync(Source);
+
+        await saved.HandleAsync(new LedgerEvent(StreamTests.SecondId, -10m), store);
+
+        Assert.Equal(StreamTests.FirstId, Assert.Single(snapshot).Id);
+        Assert.Equal(2, (await store.ReadAsync(Source)).Count);
+        Assert.Equal(125m, saved.State.Amount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Invalid_suffix_does_not_publish_history_or_consume_valid_event_identities(bool file)
+    {
+        var store = Store(file);
+        await Open(Source, 100m).HandleAsync(new LedgerEvent(StreamTests.FirstId, 25m), store);
+        var valid = new LedgerEvent(StreamTests.SecondId, -10m, new(2, Source));
+        var gap = new LedgerEvent(Guid.NewGuid(), 1m, new(4, Source));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.AppendAsync(Source, 1, new[] { valid, gap }));
+
+        Assert.Equal(StreamTests.FirstId, Assert.Single(await store.ReadAsync(Source)).Id);
+        await store.AppendAsync(Source, 1, new[] { valid });
+        var history = await store.ReadAsync(Source);
+        Assert.Equal(new[] { StreamTests.FirstId, StreamTests.SecondId }, history.Select(e => e.Id));
+        Assert.Equal(115m, EventStream<Balance, LedgerEvent>.Replay(Source,
+            new Balance(100m), StreamTests.Reduce, history).State.Amount);
     }
 
     [Fact]

@@ -124,8 +124,8 @@ public sealed class StreamPersistenceTests : IDisposable
     [InlineData(true)]
     public async Task Storage_rejects_invalid_version_or_stream_metadata_without_writing(bool wrongStream)
     {
-        var metadata = wrongStream ? new TransactionnalData(1, StreamTests.SecondId)
-            : new TransactionnalData(2, StreamTests.StreamId);
+        var metadata = wrongStream ? new EventMetadata(1, StreamTests.SecondId)
+            : new EventMetadata(2, StreamTests.StreamId);
         await Assert.ThrowsAsync<InvalidOperationException>(() => Store().AppendAsync(
             StreamTests.StreamId, 0, [new LedgerEvent(StreamTests.FirstId, 25m, metadata)]));
         Assert.False(File.Exists(LedgerPath));

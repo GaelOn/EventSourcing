@@ -13,7 +13,7 @@ public delegate ITransactionResult RollbackDelegate<TEvent>(
 
 public interface IEventTransactionManager
 {
-    private static readonly TransactionnalData NullTransactionData = new(null, null);
+    private static readonly EventMetadata NullTransactionData = new(null, null);
 
     TEvent GetEventTransactionData<TEvent>(TEvent @event, IAggregate aggregate)
         where TEvent : class, IEvent<TEvent>;
@@ -37,7 +37,7 @@ public class EventTransactionManager : IEventTransactionManager
     {
         ArgumentNullException.ThrowIfNull(@event);
         ArgumentNullException.ThrowIfNull(aggregate);
-        return Streams.EventHistory.Tag(@event, aggregate.Id, checked(aggregate.Version + 1));
+        return Streams.EventHistory.AssignMetadata(@event, aggregate.Id, checked(aggregate.Version + 1));
     }
 }
 

@@ -6,11 +6,13 @@
     <IsPackable>true</IsPackable>
     <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GeneratePackageOnBuild>
     <PackageId>EventSourcing</PackageId>
-    <Version>0.1.0-alpha</Version>
+    <Version>0.1.0-alpha.2</Version>
     <Authors>Family Horizon</Authors>
-    <Description>Experimental aggregate event acceptance and commit abstractions developed in Family Horizon.</Description>
+    <Description>Immutable event streams, deterministic replay, and atomic multi-stream persistence contracts.</Description>
     <PackageTags>event-sourcing;aggregates</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <PackageOutputPath>$(MSBuildThisFileDirectory)../../artifacts/packages</PackageOutputPath>
   </PropertyGroup>
   <ItemGroup>

@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace EventSourcing.Streams;
 
 /// <summary>
@@ -10,18 +12,23 @@ public sealed class EventStream<TState, TEvent>
     where TEvent : class, IEvent<TEvent>
 {
     private readonly Func<TState, TEvent, TState> _reduce;
+    private readonly ImmutableList<TEvent> _events;
+    private readonly ImmutableList<TEvent> _pendingEvents;
+    private readonly ImmutableHashSet<Guid> _eventIds;
     public Guid Id { get; }
     public TState State { get; }
-    public IReadOnlyList<TEvent> Events { get; }
-    public IReadOnlyList<TEvent> PendingEvents { get; }
+    public IReadOnlyList<TEvent> Events => _events;
+    public IReadOnlyList<TEvent> PendingEvents => _pendingEvents;
     public long Version => Events.Count;
     public long PersistedVersion { get; }
 
     public EventStream(Guid id, TState openingState, Func<TState, TEvent, TState> reduce)
-        : this(id, openingState, reduce, [], 0) { }
+        : this(id, openingState, reduce, ImmutableList<TEvent>.Empty,
+            ImmutableList<TEvent>.Empty, ImmutableHashSet<Guid>.Empty, 0) { }
 
     private EventStream(Guid id, TState state, Func<TState, TEvent, TState> reduce,
-        TEvent[] events, long persistedVersion)
+        ImmutableList<TEvent> events, ImmutableList<TEvent> pendingEvents,
+        ImmutableHashSet<Guid> eventIds, long persistedVersion)
     {
         if (id == Guid.Empty) throw new ArgumentException("A stream ID is required.", nameof(id));
         ArgumentNullException.ThrowIfNull(state);
@@ -29,32 +36,54 @@ public sealed class EventStream<TState, TEvent>
         Id = id;
         State = state;
         _reduce = reduce;
-        Events = Array.AsReadOnly(events);
+        _events = events;
+        _pendingEvents = pendingEvents;
+        _eventIds = eventIds;
         PersistedVersion = persistedVersion;
-        PendingEvents = Array.AsReadOnly(events.Skip(checked((int)persistedVersion)).ToArray());
     }
 
     public EventStream<TState, TEvent> Apply(TEvent @event)
     {
         ArgumentNullException.ThrowIfNull(@event);
-        if (Events.Any(existing => existing.Id == @event.Id)) throw new DuplicateEventException(@event.Id);
-        var tagged = EventHistory.Tag(@event, Id, checked(Version + 1));
+        if (_eventIds.Contains(@event.Id)) throw new DuplicateEventException(@event.Id);
+        var tagged = EventHistory.AssignMetadata(@event, Id, checked(Version + 1));
         var state = _reduce(State, tagged) ?? throw new InvalidOperationException("Reducer returned null state.");
-        return new(Id, state, _reduce, [.. Events, tagged], PersistedVersion);
+        return new(Id, state, _reduce, _events.Add(tagged), _pendingEvents.Add(tagged),
+            _eventIds.Add(tagged.Id), PersistedVersion);
     }
 
+    /// <summary>
+    /// Replay with application-owned persisted opening inputs and an explicitly identified reducer.
+    /// A version mismatch is rejected before reducing history. The caller is responsible for
+    /// identifying the reducer honestly and loading the definition belonging to this stream.
+    /// </summary>
+    public static EventStream<TState, TEvent> Replay(Guid id, ReplayDefinition<TState> definition,
+        string reducerRuleVersion, Func<TState, TEvent, TState> reduce, IEnumerable<TEvent> history)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reducerRuleVersion);
+        if (!string.Equals(definition.RuleVersion, reducerRuleVersion, StringComparison.Ordinal))
+            throw new ReplayRuleVersionException(definition.RuleVersion, reducerRuleVersion);
+        return Replay(id, definition.OpeningState, reduce, history);
+    }
+
+    /// <summary>
+    /// Low-level replay: the caller must supply the original opening state and matching rules.
+    /// This overload does not verify rule provenance; use ReplayDefinition for persisted scenarios.
+    /// </summary>
     public static EventStream<TState, TEvent> Replay(Guid id, TState openingState,
         Func<TState, TEvent, TState> reduce, IEnumerable<TEvent> history)
     {
         ArgumentNullException.ThrowIfNull(history);
         ArgumentNullException.ThrowIfNull(openingState);
         ArgumentNullException.ThrowIfNull(reduce);
-        var events = history.ToArray();
+        var events = history.ToImmutableList();
         EventHistory.Validate(id, events);
         var state = openingState;
         foreach (var @event in events)
             state = reduce(state, @event) ?? throw new InvalidOperationException("Reducer returned null state.");
-        return new(id, state, reduce, events, events.Length);
+        return new(id, state, reduce, events, ImmutableList<TEvent>.Empty,
+            events.Select(e => e.Id).ToImmutableHashSet(), events.Count);
     }
 
     public async Task<EventStream<TState, TEvent>> SaveAsync(IEventStreamStore<TEvent> store,
@@ -69,7 +98,7 @@ public sealed class EventStream<TState, TEvent>
     }
 
     internal EventStream<TState, TEvent> AsSaved() => PendingEvents.Count == 0
-        ? this : new(Id, State, _reduce, Events.ToArray(), Version);
+        ? this : new(Id, State, _reduce, _events, ImmutableList<TEvent>.Empty, _eventIds, Version);
 
     public Task<EventStream<TState, TEvent>> HandleAsync(TEvent @event, IEventStreamStore<TEvent> store,
         CancellationToken cancellationToken = default)

@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using EventSourcing.Streams;
-using EventSourcing.Transaction;
 
 namespace EventSourcing.Tests;
 
@@ -55,7 +54,7 @@ internal sealed class JsonLedgerStore(string path) : IAtomicEventStreamStore<Led
                 streams[append.StreamId] = Array.AsReadOnly(combined);
             }
             var records = streams.Select(pair => new StoredStream(pair.Key, pair.Value.Select(e =>
-                new StoredEvent(e.Id, e.Amount, e.TransactionnalData.Version!.Value)).ToArray())).ToArray();
+                new StoredEvent(e.Id, e.Amount, e.Metadata.Version!.Value)).ToArray())).ToArray();
             return JsonSerializer.Serialize(new LedgerDocument(2, records));
         }, cancellationToken);
     }
@@ -74,7 +73,7 @@ internal sealed class JsonLedgerStore(string path) : IAtomicEventStreamStore<Led
                 throw new InvalidDataException("Ledger stream is null.");
             var history = stream.Events.Select(e => e is null
                 ? throw new InvalidDataException("Ledger event is null.")
-                : new LedgerEvent(e.Id, e.Amount, new TransactionnalData(e.Version, stream.Id))).ToArray();
+                : new LedgerEvent(e.Id, e.Amount, new EventMetadata(e.Version, stream.Id))).ToArray();
             EventHistory.Validate(stream.Id, history);
             if (!result.TryAdd(stream.Id, Array.AsReadOnly(history)))
                 throw new InvalidDataException("Duplicate stream in ledger.");

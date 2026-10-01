@@ -3,6 +3,10 @@
 - Use .NET 10, C#, nullable reference types, `.slnx`, and xUnit.
 - Keep this repository independently buildable; do not reference files or projects outside it.
 - Prefer immutable state and events, explicit caller-supplied IDs, deterministic reducers, and atomic expected-version checks.
+- `EventSourcing` contains immutable streams and storage contracts. The optional `EventSourcing.Compatibility` package owns legacy callback aggregates and depends on core; core must not depend on compatibility.
+- Events expose `EventMetadata` through `Metadata`; stream identity is `StreamId`. Event identity remains separate from stream position.
+- Applications persist immutable opening inputs and rule versions alongside stream history. Prefer the `ReplayDefinition` overload for persisted scenarios and retain the matching reducer; event-only storage cannot infer replay provenance.
+- Preserve structural sharing of history and per-stream identity indexes. The dependency-free benchmark under `benchmarks/` measures apply and apply-and-save costs; timings are diagnostics, not test thresholds.
 - Add behavior-focused failing tests before changing behavior. Never weaken a valid test to obtain a green build.
 - Preserve the all-or-nothing batch contract and consistent multi-stream reads. Add reconciliation and concurrency tests when changing those guarantees.
 - Run `dotnet restore EventSourcing.slnx`, `dotnet build EventSourcing.slnx --no-restore`, and `dotnet test EventSourcing.slnx --no-build` before completion.

@@ -16,22 +16,22 @@ public sealed class EventTransactionManagerTests
 
         Assert.NotSame(original, tagged);
         Assert.Equal(original.Payload, tagged.Payload);
-        Assert.Equal(new TransactionnalData(expectedVersion, aggregate.Id), tagged.TransactionnalData);
-        Assert.Equal(new TransactionnalData(null, null), original.TransactionnalData);
+        Assert.Equal(new EventMetadata(expectedVersion, aggregate.Id), tagged.Metadata);
+        Assert.Equal(new EventMetadata(null, null), original.Metadata);
     }
 
     [Fact]
     public void Reset_returns_an_untagged_copy_and_preserves_the_original()
     {
-        var metadata = new TransactionnalData(42, Guid.Parse("ce5f910d-755a-4002-968b-978714c25e36"));
+        var metadata = new EventMetadata(42, Guid.Parse("ce5f910d-755a-4002-968b-978714c25e36"));
         var original = new TestEvent("Payload", metadata);
 
         var reset = IEventTransactionManager.ResetEventTransactionData(original);
 
         Assert.NotSame(original, reset);
         Assert.Equal(original.Payload, reset.Payload);
-        Assert.Equal(new TransactionnalData(null, null), reset.TransactionnalData);
-        Assert.Equal(metadata, original.TransactionnalData);
+        Assert.Equal(new EventMetadata(null, null), reset.Metadata);
+        Assert.Equal(metadata, original.Metadata);
     }
 
     [Fact]

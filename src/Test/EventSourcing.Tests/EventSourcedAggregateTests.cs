@@ -27,10 +27,10 @@ public sealed class EventSourcedAggregateTests
         Assert.NotSame(original, committed);
         Assert.Same(aggregate.PreparedEvent, committed);
         Assert.Equal(original.Payload, committed.Payload);
-        Assert.Equal(aggregate.Id, committed.TransactionnalData.AggregateId);
+        Assert.Equal(aggregate.Id, committed.Metadata.StreamId);
         Assert.Equal(original.Id, committed.Id);
-        Assert.Equal(1, committed.TransactionnalData.Version);
-        Assert.Equal(new TransactionnalData(null, null), original.TransactionnalData);
+        Assert.Equal(1, committed.Metadata.Version);
+        Assert.Equal(new EventMetadata(null, null), original.Metadata);
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public sealed class EventSourcedAggregateTests
         Assert.All(results, result => Assert.IsType<TransactionSuccess>(result));
         Assert.Equal(32, aggregate.Version);
         Assert.Equal(32, aggregate.SideEffect.ApplyCalls);
-        Assert.Equal(Enumerable.Range(1, 32).Select(i => (long?)i), aggregate.Events.Select(e => e.TransactionnalData.Version));
+        Assert.Equal(Enumerable.Range(1, 32).Select(i => (long?)i), aggregate.Events.Select(e => e.Metadata.Version));
     }
 
     [Fact]

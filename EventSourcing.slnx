@@ -1,8 +1,12 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/EventSourcing/EventSourcing.csproj" />
+    <Project Path="src/EventSourcing.Compatibility/EventSourcing.Compatibility.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="src/Test/EventSourcing.Tests/EventSourcing.Tests.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/EventSourcing.Benchmarks/EventSourcing.Benchmarks.csproj" />
   </Folder>
 </Solution>

@@ -3,12 +3,12 @@ using EventSourcing.Transaction;
 
 namespace EventSourcing.Tests;
 
-internal sealed class TestEvent(string payload, TransactionnalData transactionnalData, Guid? id = null)
-    : EventBase<TestEvent>(id ?? Guid.Parse("22222222-2222-2222-2222-222222222222"), transactionnalData)
+internal sealed class TestEvent(string payload, EventMetadata metadata, Guid? id = null)
+    : EventBase<TestEvent>(id ?? Guid.Parse("22222222-2222-2222-2222-222222222222"), metadata)
 {
     public string Payload { get; } = payload;
     public static TestEvent Create() => new("Test", new(null, null));
-    public override TestEvent Clone(TransactionnalData transactionnalData) => new(Payload, transactionnalData, Id);
+    public override TestEvent Clone(EventMetadata metadata) => new(Payload, metadata, Id);
 }
 
 internal sealed class TestSideEffect : ISideEffect

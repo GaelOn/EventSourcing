@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Immutable;
 
 namespace EventSourcing.Streams;
 
@@ -10,7 +11,12 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
     where TEvent : class, IEvent<TEvent>
 {
     private readonly object _gate = new();
-    private Dictionary<Guid, IReadOnlyList<TEvent>> _streams = [];
+    private ImmutableDictionary<Guid, StoredStream> _streams = ImmutableDictionary<Guid, StoredStream>.Empty;
+
+    private sealed record StoredStream(ImmutableList<TEvent> History, ImmutableHashSet<Guid> EventIds)
+    {
+        public static StoredStream Empty { get; } = new(ImmutableList<TEvent>.Empty, ImmutableHashSet<Guid>.Empty);
+    }
 
     public async Task<IReadOnlyList<TEvent>> ReadAsync(Guid streamId, CancellationToken cancellationToken = default)
         => (await ReadBatchAsync(new[] { streamId }, cancellationToken))[streamId];
@@ -25,7 +31,7 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = ids.Distinct().ToDictionary(id => id,
-                id => _streams.GetValueOrDefault(id) ?? Array.Empty<TEvent>());
+                id => (IReadOnlyList<TEvent>)(_streams.GetValueOrDefault(id) ?? StoredStream.Empty).History);
             return Task.FromResult<IReadOnlyDictionary<Guid, IReadOnlyList<TEvent>>>(
                 new ReadOnlyDictionary<Guid, IReadOnlyList<TEvent>>(snapshot));
         }
@@ -49,18 +55,26 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
         lock (_gate)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var next = new Dictionary<Guid, IReadOnlyList<TEvent>>(_streams);
+            var next = _streams.ToBuilder();
             foreach (var append in batch)
             {
-                var stored = _streams.GetValueOrDefault(append.StreamId) ?? Array.Empty<TEvent>();
-                if (stored.Count != append.ExpectedVersion)
-                    throw new StreamConcurrencyException(append.ExpectedVersion, stored.Count);
-                var combined = stored.Concat(append.Events).ToArray();
-                EventHistory.Validate(append.StreamId, combined);
-                next[append.StreamId] = Array.AsReadOnly(combined);
+                var stored = _streams.GetValueOrDefault(append.StreamId) ?? StoredStream.Empty;
+                if (stored.History.Count != append.ExpectedVersion)
+                    throw new StreamConcurrencyException(append.ExpectedVersion, stored.History.Count);
+                var eventIds = stored.EventIds.ToBuilder();
+                var version = append.ExpectedVersion;
+                // Stored history was validated before publication. Only the new suffix needs validation.
+                foreach (var e in append.Events)
+                {
+                    ArgumentNullException.ThrowIfNull(e);
+                    if (e.Id == Guid.Empty) throw new InvalidOperationException("An event ID is required.");
+                    if (!eventIds.Add(e.Id)) throw new DuplicateEventException(e.Id);
+                    EventHistory.ValidatePosition(append.StreamId, e, checked(++version));
+                }
+                next[append.StreamId] = new(stored.History.AddRange(append.Events), eventIds.ToImmutable());
             }
             cancellationToken.ThrowIfCancellationRequested();
-            _streams = next;
+            _streams = next.ToImmutable();
         }
         return Task.CompletedTask;
     }

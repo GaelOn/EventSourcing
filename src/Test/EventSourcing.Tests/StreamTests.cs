@@ -1,5 +1,4 @@
 using EventSourcing.Streams;
-using EventSourcing.Transaction;
 
 namespace EventSourcing.Tests;
 
@@ -23,9 +22,9 @@ public sealed class StreamTests
         Assert.Equal(2, changed.Version);
         Assert.Equal(0, changed.PersistedVersion);
         Assert.Equal(new[] { FirstId, SecondId }, changed.Events.Select(e => e.Id));
-        Assert.Equal(new long?[] { 1, 2 }, changed.Events.Select(e => e.TransactionnalData.Version));
-        Assert.All(changed.Events, e => Assert.Equal(StreamId, e.TransactionnalData.AggregateId));
-        Assert.Null(income.TransactionnalData.Version);
+        Assert.Equal(new long?[] { 1, 2 }, changed.Events.Select(e => e.Metadata.Version));
+        Assert.All(changed.Events, e => Assert.Equal(StreamId, e.Metadata.StreamId));
+        Assert.Null(income.Metadata.Version);
     }
 
     [Fact]
@@ -93,6 +92,25 @@ public sealed class StreamTests
         Assert.Empty(another.Events);
     }
 
+    [Fact]
+    public async Task Saving_and_branching_retain_history_but_only_new_events_remain_pending()
+    {
+        var store = new InMemoryEventStreamStore<LedgerEvent>();
+        var pending = Create().Apply(new LedgerEvent(FirstId, 25m));
+        var saved = await pending.SaveAsync(store);
+        var branch = saved.Apply(new LedgerEvent(SecondId, -10m));
+        var savedBranch = await branch.SaveAsync(store);
+
+        Assert.Equal(FirstId, Assert.Single(pending.PendingEvents).Id);
+        Assert.Empty(saved.PendingEvents);
+        Assert.Single(saved.Events);
+        Assert.Equal(SecondId, Assert.Single(branch.PendingEvents).Id);
+        Assert.Equal(1, branch.PersistedVersion);
+        Assert.Equal(new[] { FirstId, SecondId }, savedBranch.Events.Select(e => e.Id));
+        Assert.Empty(savedBranch.PendingEvents);
+        Assert.Equal(115m, savedBranch.State.Amount);
+    }
+
 }
 
 public sealed record Balance(decimal Amount);
@@ -100,7 +118,7 @@ public sealed record Balance(decimal Amount);
 public sealed class LedgerEvent : EventBase<LedgerEvent>
 {
     public decimal Amount { get; }
-    public LedgerEvent(Guid id, decimal amount, TransactionnalData? transactionnalData = null)
-        : base(id, transactionnalData ?? new(null, null)) => Amount = amount;
-    public override LedgerEvent Clone(TransactionnalData transactionnalData) => new(Id, Amount, transactionnalData);
+    public LedgerEvent(Guid id, decimal amount, EventMetadata? metadata = null)
+        : base(id, metadata ?? new(null, null)) => Amount = amount;
+    public override LedgerEvent Clone(EventMetadata metadata) => new(Id, Amount, metadata);
 }
