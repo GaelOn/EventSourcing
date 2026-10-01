@@ -1,5 +1,7 @@
 # EventSourcing
 
+Licensed under the [MIT License](LICENSE). Copyright (c) 2026 Gaël Dupire.
+
 EventSourcing is a standalone .NET 10 library for building business aggregates whose state evolves through events. It supports immutable updates, deterministic replay, optimistic concurrency, atomic changes across related streams, and snapshots that avoid replaying old events.
 
 The application defines what its state and events mean. The library handles event identity, stream positions, replay validation, and persistence contracts. It does not choose a database or implement business rules for you.
@@ -380,3 +382,8 @@ dotnet run --project benchmarks/EventSourcing.Benchmarks -c Release --no-build
 ```
 
 See the [benchmark notes](benchmarks/EventSourcing.Benchmarks/README.md) for methodology and limitations.
+
+
+See the [aggregate lifecycle and reversal guide](docs/refinement-lifecycle.md),
+[generated-package consumer](validation/PackageConsumer/README.md), and
+[recorded performance baseline](benchmarks/EventSourcing.PerformanceTests/baselines/README.md).
