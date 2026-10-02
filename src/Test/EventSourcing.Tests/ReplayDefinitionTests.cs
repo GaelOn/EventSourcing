@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using System.Text.Json;
 using EventSourcing.Streams;
 
@@ -13,16 +14,16 @@ public sealed class ReplayDefinitionTests
         try
         {
             var definition = new ReplayDefinition<Balance>(new Balance(100m), "balance/v1");
-            var live = new EventStream<Balance, LedgerEvent>(StreamTests.StreamId,
-                definition.OpeningState, StreamTests.Reduce)
+            var live = new EventSourcedAggregate<Balance>(StreamTests.StreamId,
+                definition.OpeningState, "balance/v1", StreamTests.Reduce)
                 .Apply(new LedgerEvent(StreamTests.FirstId, 25m))
                 .Apply(new LedgerEvent(StreamTests.SecondId, -10m));
-            var scenario = new StoredScenario(live.Id, definition, live.Events.ToArray());
+            var scenario = new StoredScenario(live.Id, definition, live.Events.Cast<LedgerEvent>().ToArray());
             await new JsonFileStore(path).UpdateAsync(_ => JsonSerializer.Serialize(scenario));
 
             var json = await new JsonFileStore(path).ReadAsync();
             var restored = JsonSerializer.Deserialize<StoredScenario>(json!)!;
-            var replayed = EventStream<Balance, LedgerEvent>.Replay(restored.StreamId,
+            var replayed = EventSourcedAggregate<Balance>.Replay(restored.StreamId,
                 restored.Definition, "balance/v1", StreamTests.Reduce, restored.Events);
 
             Assert.Equal(115m, replayed.State.Amount);
@@ -44,7 +45,7 @@ public sealed class ReplayDefinitionTests
         var storedDefinition = JsonSerializer.Serialize(definition);
         var restored = JsonSerializer.Deserialize<ReplayDefinition<Balance>>(storedDefinition)!;
 
-        var replayed = EventStream<Balance, LedgerEvent>.Replay(StreamTests.StreamId,
+        var replayed = EventSourcedAggregate<Balance>.Replay(StreamTests.StreamId,
             restored, "balance/v1", StreamTests.Reduce, live.Events);
 
         Assert.Equal(live.State, replayed.State);
@@ -58,7 +59,7 @@ public sealed class ReplayDefinitionTests
         var history = StreamTests.Create().Apply(new LedgerEvent(StreamTests.FirstId, 25m)).Events;
         var calls = 0;
 
-        Assert.Throws<ReplayRuleVersionException>(() => EventStream<Balance, LedgerEvent>.Replay(
+        Assert.Throws<ReplayRuleVersionException>(() => EventSourcedAggregate<Balance>.Replay(
             StreamTests.StreamId, definition, "balance/v2",
             (state, e) => { calls++; return StreamTests.Reduce(state, e); }, history));
 

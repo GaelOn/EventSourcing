@@ -4,29 +4,29 @@ using EventSourcing.ObjectsAggregation;
 using EventSourcing.Snapshots;
 using EventSourcing.Streams;
 
-var dispatcher = EventHandlerDispatcher<Value, Change>.CreateBuilder("consumer/v1")
-    .Register<Change>(new ChangeHandler()).Build();
+var dispatcher = EventHandlerDispatcher<Value>.CreateBuilder("consumer/v1")
+    .Register<Change>(new ChangeHandler()).Register<Incremented>(new IncrementHandler()).Build();
 var opening = new Value(10);
 var e = new Change(Guid.NewGuid(), 10, 15);
 Require(dispatcher.Undo(dispatcher.Do(opening, e), e) == opening);
-var store = new InMemoryEventStreamStore<Change>();
+var store = new InMemoryEventStreamStore();
 var snapshots = new InMemorySnapshotStore<Value>();
-var original = new Root(new EventStream<Value, Change>(Guid.NewGuid(), opening, dispatcher));
-var saved = new Root(await original.Stream.HandleAsync(e, store));
+var original = new Root(new EventSourcedAggregate<Value>(Guid.NewGuid(), opening, dispatcher));
+var saved = await original.HandleAsync(e, store);
 await saved.SaveSnapshotAsync(snapshots, 1);
-var loaded = await EventStream<Value, Change>.LoadAsync(saved.Id,
+var loaded = await EventSourcedAggregate<Value>.LoadAsync(saved.Id,
     new ReplayDefinition<Value>(opening, dispatcher.RuleVersion), 1, dispatcher, store, snapshots);
 Require(loaded.State == saved.State && loaded.Version == 1 && loaded.HistoryStartVersion == 1);
 Require(saved.RuleVersion == "consumer/v1" && !saved.HasPendingChanges && saved.PendingEvents.Count == 0);
 try { loaded.Apply(new Change(e.Id, 15, 20)); throw new Exception("Duplicate accepted."); }
 catch (DuplicateEventException error) { Require(error.EventId == e.Id && error.StreamId == loaded.Id); }
-var next = loaded.Apply(new Change(Guid.NewGuid(), 15, 20));
-var other = new EventStream<Value, Change>(Guid.NewGuid(), opening,
-    new EventReducer<Value, Change>("consumer/v1", dispatcher.Do)).Apply(new Change(Guid.NewGuid(), 10, 12));
-var batch = await EventStreamBatch.SaveAsync(store, new[] { next, other });
+var next = loaded.Apply(new Incremented(Guid.NewGuid(), 5));
+var other = new EventSourcedAggregate<Value>(Guid.NewGuid(), opening,
+    new EventReducer<Value>("consumer/v1", dispatcher.Do)).Apply(new Change(Guid.NewGuid(), 10, 12));
+var batch = await EventSourcedAggregateBatch.SaveAsync(store, new[] { next, other });
 Require(batch.All(s => s.PendingEvents.Count == 0));
 var slices = await store.ReadBatchFromAsync(new[] { new StreamReadRequest(next.Id, 1), new StreamReadRequest(other.Id, 0) });
-Require(EventStream<Value, Change>.Replay(saved.CaptureSnapshot(1), 1, dispatcher, slices[next.Id]).State == new Value(20));
+Require(EventSourcedAggregate<Value>.Replay(saved.CaptureSnapshot(1), 1, dispatcher, slices[next.Id]).State == new Value(20));
 try { await next.SaveAsync(store); throw new Exception("Stale write accepted."); }
 catch (StreamConcurrencyException error) { Require(error.ExpectedVersion == 1 && error.ActualVersion == 2 && error.StreamId == next.Id); }
 Console.WriteLine("Package consumer passed: handlers, reversal, aggregates, snapshots, duplicate diagnostics and atomic persistence.");
@@ -44,7 +44,21 @@ sealed class ChangeHandler : IEventHandler<Value, Change>
     public Value Do(Value state, Change e) => state.Amount == e.Previous ? new(e.Next) : throw new InvalidOperationException("Previous value mismatch.");
     public Value Undo(Value state, Change e) => state.Amount == e.Next ? new(e.Previous) : throw new InvalidOperationException("Immediate result required.");
 }
-sealed class Root(EventStream<Value, Change> stream) : EventSourcedAggregate<Value, Change>(stream)
+sealed class Root(EventSourcedAggregate<Value> stream) : EventSourcedAggregate<Value>(stream)
 {
     public override IEnumerable<IEntity> Entities => Array.Empty<IEntity>();
+}
+
+// An unrelated event implements the non-generic contract directly.
+sealed class Incremented(Guid id, decimal amount, EventMetadata? metadata = null) : IEvent
+{
+    public Guid Id { get; } = id;
+    public decimal Amount { get; } = amount;
+    public EventMetadata Metadata { get; } = metadata ?? new(null, null);
+    public IEvent Clone(EventMetadata metadata) => new Incremented(Id, Amount, metadata);
+}
+sealed class IncrementHandler : IEventHandler<Value, Incremented>
+{
+    public Value Do(Value s, Incremented e) => new(s.Amount + e.Amount);
+    public Value Undo(Value s, Incremented e) => new(s.Amount - e.Amount);
 }

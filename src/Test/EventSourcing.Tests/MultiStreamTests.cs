@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using EventSourcing.Streams;
 
 namespace EventSourcing.Tests;
@@ -7,10 +8,10 @@ public sealed class MultiStreamTests : IDisposable
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "multi-stream-" + Guid.NewGuid());
     private static readonly Guid Source = StreamTests.StreamId;
     private static readonly Guid Destination = StreamTests.SecondId;
-    private IAtomicEventStreamStore<LedgerEvent> Store(bool file) => file
+    private IAtomicEventStreamStore Store(bool file) => file
         ? new JsonLedgerStore(Path.Combine(_directory, "ledger.json"))
-        : new InMemoryEventStreamStore<LedgerEvent>();
-    private static EventStream<Balance, LedgerEvent> Open(Guid id, decimal amount) => new(id, new(amount), StreamTests.Reduce);
+        : new InMemoryEventStreamStore();
+    private static EventSourcedAggregate<Balance> Open(Guid id, decimal amount) => new(id, new(amount), "balance/v1", StreamTests.Reduce);
 
     [Theory]
     [InlineData(false)]
@@ -21,13 +22,13 @@ public sealed class MultiStreamTests : IDisposable
         var source = Open(Source, 100m).Apply(new LedgerEvent(StreamTests.FirstId, -25m));
         var destination = Open(Destination, 0m).Apply(new LedgerEvent(StreamTests.FirstId, 25m));
 
-        var saved = await EventStreamBatch.SaveAsync(store, new[] { source, destination });
+        var saved = await EventSourcedAggregateBatch.SaveAsync(store, new[] { source, destination });
         var history = await store.ReadBatchAsync(new[] { Source, Destination });
 
         Assert.All(saved, stream => Assert.Empty(stream.PendingEvents));
         Assert.All(history.Values, events => Assert.Single(events));
         Assert.Equal(100m, saved.Sum(stream => stream.State.Amount));
-        Assert.Equal(0m, history.Values.SelectMany(events => events).Sum(e => e.Amount));
+        Assert.Equal(0m, history.Values.SelectMany(events => events).Sum(e => ((LedgerEvent)e).Amount));
         Assert.Single(source.PendingEvents);
         Assert.Single(destination.PendingEvents);
         if (file)
@@ -44,11 +45,11 @@ public sealed class MultiStreamTests : IDisposable
         var destination = Open(Destination, 0m).Apply(new LedgerEvent(StreamTests.FirstId, 25m));
         await Open(Destination, 0m).HandleAsync(new LedgerEvent(Guid.NewGuid(), 10m), store);
 
-        await Assert.ThrowsAsync<StreamConcurrencyException>(() => EventStreamBatch.SaveAsync(store, new[] { source, destination }));
+        await Assert.ThrowsAsync<StreamConcurrencyException>(() => EventSourcedAggregateBatch.SaveAsync(store, new[] { source, destination }));
 
         var history = await store.ReadBatchAsync(new[] { Source, Destination });
         Assert.Empty(history[Source]);
-        Assert.Equal(10m, Assert.Single(history[Destination]).Amount);
+        Assert.Equal(10m, ((LedgerEvent)Assert.Single(history[Destination])).Amount);
         Assert.All(new[] { source, destination }, s => Assert.Equal(0, s.PersistedVersion));
     }
 
@@ -64,8 +65,8 @@ public sealed class MultiStreamTests : IDisposable
 
         await Assert.ThrowsAsync<DuplicateEventException>(() => store.AppendBatchAsync(new[]
         {
-            new StreamAppend<LedgerEvent>(Source, 0, source.PendingEvents),
-            new StreamAppend<LedgerEvent>(Destination, saved.Version, new[] { duplicate })
+            new StreamAppend(Source, 0, source.PendingEvents),
+            new StreamAppend(Destination, saved.Version, new[] { duplicate })
         }));
         Assert.Empty(await store.ReadAsync(Source));
         Assert.Single(await store.ReadAsync(Destination));
@@ -80,7 +81,7 @@ public sealed class MultiStreamTests : IDisposable
         var unchanged = Open(Source, 100m);
         await unchanged.HandleAsync(new LedgerEvent(Guid.NewGuid(), 1m), store);
         var changed = Open(Destination, 0m).Apply(new LedgerEvent(Guid.NewGuid(), 25m));
-        await Assert.ThrowsAsync<StreamConcurrencyException>(() => EventStreamBatch.SaveAsync(store, new[] { unchanged, changed }));
+        await Assert.ThrowsAsync<StreamConcurrencyException>(() => EventSourcedAggregateBatch.SaveAsync(store, new[] { unchanged, changed }));
         Assert.Empty(await store.ReadAsync(Destination));
     }
 
@@ -94,7 +95,7 @@ public sealed class MultiStreamTests : IDisposable
         cancellation.Cancel();
         var streams = new[] { Open(Source, 100m).Apply(new LedgerEvent(Guid.NewGuid(), -25m)),
             Open(Destination, 0m).Apply(new LedgerEvent(Guid.NewGuid(), 25m)) };
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => EventStreamBatch.SaveAsync(store, streams, cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => EventSourcedAggregateBatch.SaveAsync(store, streams, cancellation.Token));
         Assert.All((await store.ReadBatchAsync(new[] { Source, Destination })).Values, Assert.Empty);
     }
 
@@ -149,7 +150,7 @@ public sealed class MultiStreamTests : IDisposable
             {
                 Assert.True(phase.SignalAndWait(TimeSpan.FromSeconds(10)), "Reader did not reach the write phase.");
                 var id = Guid.NewGuid();
-                var saved = await EventStreamBatch.SaveAsync(store, new[] {
+                var saved = await EventSourcedAggregateBatch.SaveAsync(store, new[] {
                     source.Apply(new LedgerEvent(id, -1m)), destination.Apply(new LedgerEvent(id, 1m)) });
                 source = saved[0];
                 destination = saved[1];
@@ -163,18 +164,18 @@ public sealed class MultiStreamTests : IDisposable
                 Assert.True(phase.SignalAndWait(TimeSpan.FromSeconds(10)), "Writer did not reach the read phase.");
                 var concurrent = await store.ReadBatchAsync(new[] { Source, Destination });
                 Assert.Equal(concurrent[Source].Count, concurrent[Destination].Count);
-                Assert.Equal(0m, concurrent.Values.SelectMany(events => events).Sum(e => e.Amount));
+                Assert.Equal(0m, concurrent.Values.SelectMany(events => events).Sum(e => ((LedgerEvent)e).Amount));
                 var suffixes = await store.ReadBatchFromAsync(new[] {
                     new StreamReadRequest(Source, i), new StreamReadRequest(Destination, i) });
                 Assert.Equal(suffixes[Source].Version, suffixes[Destination].Version);
                 Assert.Equal(suffixes[Source].Events.Count, suffixes[Destination].Events.Count);
-                Assert.Equal(0m, suffixes.Values.SelectMany(slice => slice.Events).Sum(e => e.Amount));
+                Assert.Equal(0m, suffixes.Values.SelectMany(slice => slice.Events).Sum(e => ((LedgerEvent)e).Amount));
                 Assert.True(phase.SignalAndWait(TimeSpan.FromSeconds(10)), "Writer did not finish its commit.");
                 // Every round must observe progress, so the test cannot pass by sampling only an empty ledger.
                 var committed = await store.ReadBatchAsync(new[] { Source, Destination });
                 Assert.Equal(i + 1, committed[Source].Count);
                 Assert.Equal(i + 1, committed[Destination].Count);
-                Assert.Equal(0m, committed.Values.SelectMany(events => events).Sum(e => e.Amount));
+                Assert.Equal(0m, committed.Values.SelectMany(events => events).Sum(e => ((LedgerEvent)e).Amount));
             }
         });
         await Task.WhenAll(writer, reader);
@@ -186,7 +187,7 @@ public sealed class MultiStreamTests : IDisposable
     {
         var store = Store(false);
         var stream = Open(Source, 100m).Apply(new LedgerEvent(Guid.NewGuid(), 1m));
-        await Assert.ThrowsAsync<ArgumentException>(() => EventStreamBatch.SaveAsync(store, new[] { stream, stream }));
+        await Assert.ThrowsAsync<ArgumentException>(() => EventSourcedAggregateBatch.SaveAsync(store, new[] { stream, stream }));
         Assert.Empty(await store.ReadAsync(Source));
     }
 
@@ -209,7 +210,7 @@ public sealed class MultiStreamTests : IDisposable
     {
         var store = Store(file);
         var snapshot = await store.ReadBatchAsync(new[] { Source, Destination });
-        await EventStreamBatch.SaveAsync(store, new[] {
+        await EventSourcedAggregateBatch.SaveAsync(store, new[] {
             Open(Source, 100m).Apply(new LedgerEvent(Guid.NewGuid(), -1m)),
             Open(Destination, 0m).Apply(new LedgerEvent(Guid.NewGuid(), 1m)) });
         Assert.All(snapshot.Values, Assert.Empty);
@@ -248,15 +249,15 @@ public sealed class MultiStreamTests : IDisposable
         await store.AppendAsync(Source, 1, new[] { valid });
         var history = await store.ReadAsync(Source);
         Assert.Equal(new[] { StreamTests.FirstId, StreamTests.SecondId }, history.Select(e => e.Id));
-        Assert.Equal(115m, EventStream<Balance, LedgerEvent>.Replay(Source,
-            new Balance(100m), StreamTests.Reduce, history).State.Amount);
+        Assert.Equal(115m, EventSourcedAggregate<Balance>.Replay(Source,
+            new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1", StreamTests.Reduce, history).State.Amount);
     }
 
     [Fact]
     public async Task Failed_file_batch_keeps_both_participants_pending_and_the_ledger_unchanged()
     {
         var store = Store(true);
-        var saved = await EventStreamBatch.SaveAsync(store, new[] {
+        var saved = await EventSourcedAggregateBatch.SaveAsync(store, new[] {
             Open(Source, 100m).Apply(new LedgerEvent(Guid.NewGuid(), -1m)),
             Open(Destination, 0m).Apply(new LedgerEvent(Guid.NewGuid(), 1m)) });
         var file = Path.Combine(_directory, "ledger.json");
@@ -265,11 +266,11 @@ public sealed class MultiStreamTests : IDisposable
             saved[1].Apply(new LedgerEvent(Guid.NewGuid(), 25m)) };
         using (var lease = new FileStream(file + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
         {
-            await Assert.ThrowsAsync<IOException>(() => EventStreamBatch.SaveAsync(store, pending));
+            await Assert.ThrowsAsync<IOException>(() => EventSourcedAggregateBatch.SaveAsync(store, pending));
         }
         Assert.Equal(before, await File.ReadAllBytesAsync(file));
         Assert.All(pending, stream => Assert.Single(stream.PendingEvents));
-        var retried = await EventStreamBatch.SaveAsync(store, pending);
+        var retried = await EventSourcedAggregateBatch.SaveAsync(store, pending);
         Assert.All(retried, stream => Assert.Equal(2, stream.PersistedVersion));
         Assert.Equal(100m, retried.Sum(stream => stream.State.Amount));
     }
@@ -281,7 +282,7 @@ public sealed class MultiStreamTests : IDisposable
     {
         var store = Store(file);
         var stream = Open(Source, 100m).Apply(new LedgerEvent(Guid.NewGuid(), 1m));
-        var append = new StreamAppend<LedgerEvent>(Source, 0, stream.PendingEvents);
+        var append = new StreamAppend(Source, 0, stream.PendingEvents);
         await Assert.ThrowsAsync<ArgumentException>(() => store.AppendBatchAsync(new[] { append, append }));
         Assert.Empty(await store.ReadAsync(Source));
     }

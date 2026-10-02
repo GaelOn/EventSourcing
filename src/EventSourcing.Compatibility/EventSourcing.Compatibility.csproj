@@ -7,7 +7,7 @@
     <IsPackable>true</IsPackable>
     <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GeneratePackageOnBuild>
     <PackageId>EventSourcing.Compatibility</PackageId>
-    <Version>0.1.0-alpha.5</Version>
+    <Version>0.2.0</Version>
     <RepositoryUrl>https://github.com/GaelOn/EventSourcing</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <Authors>Family Horizon</Authors>

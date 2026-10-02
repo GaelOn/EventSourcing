@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using EventSourcing.ExternalHandlers.Fixture;
 using EventSourcing.Handlers;
 using EventSourcing.Streams;
@@ -18,21 +19,21 @@ public sealed class LifetimeTests
         var probe = new ConstructionProbe();
         var services = new ServiceCollection();
         services.AddSingleton(probe);
-        services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1", h =>
+        services.AddEventHandlerDispatcher<Inventory>("probe/v1", h =>
             h.AddHandler<Received, ProbeHandler>(handlerLifetime), dispatcherLifetime);
         using var provider = services.BuildServiceProvider(Validated());
         using var firstScope = provider.CreateScope();
         using var secondScope = provider.CreateScope();
-        var first = firstScope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1");
-        var repeat = firstScope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1");
-        var second = secondScope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1");
+        var first = firstScope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("probe/v1");
+        var repeat = firstScope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("probe/v1");
+        var second = secondScope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("probe/v1");
         if (dispatcherLifetime == ServiceLifetime.Transient) Assert.NotSame(first, repeat);
         else Assert.Same(first, repeat);
         if (sharedAcrossScopes) Assert.Same(first, second); else Assert.NotSame(first, second);
         Assert.Equal(expectedHandlers, probe.Count);
         var state = new Inventory(new("Original", 10));
         var e = new Received(Guid.NewGuid(), 3);
-        var stream = new EventStream<Inventory, InventoryEvent>(Guid.NewGuid(), state, first).Apply(e);
+        var stream = new EventSourcedAggregate<Inventory>(Guid.NewGuid(), state, first).Apply(e);
         var history = stream.Events.ToArray();
         for (var i = 0; i < 3; i++) Assert.Equal(state, first.Undo(first.Do(state, e), e));
         Assert.Equal(expectedHandlers, probe.Count);
@@ -44,16 +45,16 @@ public sealed class LifetimeTests
     {
         var probe = new ConstructionProbe();
         var services = new ServiceCollection(); services.AddSingleton(probe);
-        EventHandlerRegistrationBuilder<Inventory, InventoryEvent>? captured = null;
-        services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1", h =>
+        EventHandlerRegistrationBuilder<Inventory>? captured = null;
+        services.AddEventHandlerDispatcher<Inventory>("probe/v1", h =>
         { captured = h; h.AddHandler<Received, MultiHandler>(ServiceLifetime.Transient).AddHandler<Renamed, MultiHandler>(ServiceLifetime.Transient); });
         var registeredCount = services.Count;
         using var provider = services.BuildServiceProvider(Validated());
         using var scope = provider.CreateScope();
-        var dispatcher = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1");
+        var dispatcher = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("probe/v1");
         Assert.Equal(1, probe.Count);
         var opening = new Inventory(new("Original", 10));
-        InventoryEvent[] events = [new Received(Guid.NewGuid(), 3), new Renamed(Guid.NewGuid(), "Original", "Next")];
+        IEvent[] events = [new Received(Guid.NewGuid(), 3), new Renamed(Guid.NewGuid(), "Original", "Next")];
         foreach (var e in events) Assert.Equal(opening, dispatcher.Undo(dispatcher.Do(opening, e), e));
         Assert.Equal(1, probe.Count); Assert.Equal(registeredCount, services.Count);
         Assert.Throws<InvalidOperationException>(() => captured!.AddHandler<Unregistered, NoOpHandler>());
@@ -63,11 +64,11 @@ public sealed class LifetimeTests
     public void Singleton_dispatcher_cannot_capture_scoped_handler_with_scope_validation()
     {
         var services = new ServiceCollection(); services.AddSingleton(new ConstructionProbe());
-        services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1", h =>
+        services.AddEventHandlerDispatcher<Inventory>("probe/v1", h =>
             h.AddHandler<Received, ProbeHandler>(ServiceLifetime.Scoped), ServiceLifetime.Singleton);
         using var provider = services.BuildServiceProvider(Validated());
         using var scope = provider.CreateScope();
-        Assert.Throws<InvalidOperationException>(() => scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1"));
+        Assert.Throws<InvalidOperationException>(() => scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("probe/v1"));
     }
 
     [Theory]
@@ -76,13 +77,13 @@ public sealed class LifetimeTests
     public void Singleton_dispatcher_cannot_capture_scoped_dependency(ServiceLifetime handlerLifetime)
     {
         var services = new ServiceCollection(); services.AddScoped<ScopedDependency>();
-        services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1", h =>
+        services.AddEventHandlerDispatcher<Inventory>("probe/v1", h =>
             h.AddHandler<Received, DependentHandler>(handlerLifetime), ServiceLifetime.Singleton);
         var error = Record.Exception(() =>
         {
             using var provider = services.BuildServiceProvider(Validated());
             using var scope = provider.CreateScope();
-            scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1");
+            scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("probe/v1");
         });
         Assert.NotNull(error);
         Assert.True(error is InvalidOperationException or AggregateException);
@@ -91,15 +92,15 @@ public sealed class LifetimeTests
     [Theory]
     [InlineData(ServiceLifetime.Scoped)]
     [InlineData(ServiceLifetime.Transient)]
-    public void Escaped_dispatcher_and_stream_reject_transitions_after_scope_disposal(ServiceLifetime dispatcherLifetime)
+    public void Escaped_dispatcher_and_aggregate_reject_transitions_after_scope_disposal(ServiceLifetime dispatcherLifetime)
     {
         var services = new ServiceCollection(); services.AddSingleton(new ConstructionProbe());
-        services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1", h => h.AddHandler<Received, ProbeHandler>(), dispatcherLifetime);
+        services.AddEventHandlerDispatcher<Inventory>("probe/v1", h => h.AddHandler<Received, ProbeHandler>(), dispatcherLifetime);
         using var provider = services.BuildServiceProvider(Validated());
         var scope = provider.CreateScope();
-        var dispatcher = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1");
+        var dispatcher = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("probe/v1");
         var opening = new Inventory(new("Original", 10)); var e = new Received(Guid.NewGuid(), 3);
-        var stream = new EventStream<Inventory, InventoryEvent>(Guid.NewGuid(), opening, dispatcher).Apply(e);
+        var stream = new EventSourcedAggregate<Inventory>(Guid.NewGuid(), opening, dispatcher).Apply(e);
         scope.Dispose();
         Assert.Throws<ObjectDisposedException>(() => dispatcher.Do(opening, e));
         Assert.Throws<ObjectDisposedException>(() => dispatcher.Undo(stream.State, e));
@@ -112,11 +113,11 @@ public sealed class LifetimeTests
     public void Singleton_dispatcher_survives_child_scope_but_rejects_use_after_provider_disposal()
     {
         var services = new ServiceCollection(); services.AddSingleton(new ConstructionProbe());
-        services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1", h =>
+        services.AddEventHandlerDispatcher<Inventory>("probe/v1", h =>
             h.AddHandler<Received, ProbeHandler>(ServiceLifetime.Singleton), ServiceLifetime.Singleton);
         var provider = services.BuildServiceProvider(Validated());
         var scope = provider.CreateScope();
-        var dispatcher = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1"); scope.Dispose();
+        var dispatcher = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("probe/v1"); scope.Dispose();
         var opening = new Inventory(new("Original", 10)); var e = new Received(Guid.NewGuid(), 1);
         Assert.Equal(11, dispatcher.Do(opening, e).OwnedItem.Quantity);
         provider.Dispose();
@@ -127,7 +128,7 @@ public sealed class LifetimeTests
     public void Conflicting_lifetimes_for_one_implementation_fail_without_partial_registration()
     {
         var services = new ServiceCollection();
-        Assert.Throws<ArgumentException>(() => services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("probe/v1", h =>
+        Assert.Throws<ArgumentException>(() => services.AddEventHandlerDispatcher<Inventory>("probe/v1", h =>
             h.AddHandler<Received, MultiHandler>(ServiceLifetime.Singleton).AddHandler<Renamed, MultiHandler>(ServiceLifetime.Scoped)));
         Assert.Empty(services);
     }

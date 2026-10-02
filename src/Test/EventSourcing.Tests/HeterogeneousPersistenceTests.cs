@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using System.Text.Json.Nodes;
 using EventSourcing.Handlers;
 using EventSourcing.Snapshots;
@@ -17,7 +18,7 @@ public sealed class HeterogeneousPersistenceTests : IDisposable
         var snapshotPath = Path.Combine(_directory, "snapshot.json");
         var rules = Rules();
         var definition = new ReplayDefinition<CatalogState>(new("Original", 10), rules.RuleVersion);
-        var stream = new EventStream<CatalogState, CatalogEvent>(StreamTests.StreamId, definition.OpeningState, rules);
+        var stream = new EventSourcedAggregate<CatalogState>(StreamTests.StreamId, definition.OpeningState, rules);
         var store = new CatalogJsonStore(path);
         var saved = await stream.Apply(new ReceivedEvent(StreamTests.FirstId, 5))
             .Apply(new RenamedEvent(StreamTests.SecondId, "Original", "Renamed")).SaveAsync(store);
@@ -29,8 +30,8 @@ public sealed class HeterogeneousPersistenceTests : IDisposable
         var history = await reopened.ReadAsync(stream.Id);
         Assert.Collection(history, e => Assert.IsType<ReceivedEvent>(e), e => Assert.IsType<RenamedEvent>(e),
             e => Assert.IsType<ReceivedEvent>(e));
-        var replayed = EventStream<CatalogState, CatalogEvent>.Replay(stream.Id, definition, rules, history);
-        var restored = await EventStream<CatalogState, CatalogEvent>.LoadAsync(stream.Id, definition, 1, rules,
+        var replayed = EventSourcedAggregate<CatalogState>.Replay(stream.Id, definition, rules, history);
+        var restored = await EventSourcedAggregate<CatalogState>.LoadAsync(stream.Id, definition, 1, rules,
             reopened, new JsonSnapshotStore<CatalogState>(snapshotPath));
         Assert.Equal(new CatalogState("Renamed", 18), saved.State);
         Assert.Equal(saved.State, replayed.State);
@@ -55,7 +56,7 @@ public sealed class HeterogeneousPersistenceTests : IDisposable
         Directory.CreateDirectory(_directory);
         var path = Path.Combine(_directory, "events.json");
         var store = new CatalogJsonStore(path);
-        var saved = await new EventStream<CatalogState, CatalogEvent>(StreamTests.StreamId, new("Original", 10), Rules())
+        var saved = await new EventSourcedAggregate<CatalogState>(StreamTests.StreamId, new("Original", 10), Rules())
             .HandleAsync(new ReceivedEvent(StreamTests.FirstId, 1), store);
         var json = JsonNode.Parse(await File.ReadAllTextAsync(path))!;
         var record = json["Streams"]![0]!["Events"]![0]!;
@@ -84,8 +85,8 @@ public sealed class HeterogeneousPersistenceTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => rules.Undo(original with { Name = "Other" }, rename));
     }
 
-    private static EventHandlerDispatcher<CatalogState, CatalogEvent> Rules() =>
-        EventHandlerDispatcher<CatalogState, CatalogEvent>.CreateBuilder("catalog/v1")
+    private static EventHandlerDispatcher<CatalogState> Rules() =>
+        EventHandlerDispatcher<CatalogState>.CreateBuilder("catalog/v1")
             .Register<ReceivedEvent>(new ReceivedHandler()).Register<RenamedEvent>(new RenamedHandler()).Build();
     public void Dispose() { if (Directory.Exists(_directory)) Directory.Delete(_directory, true); }
 }

@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using System.Text.Json;
 using EventSourcing.ExternalHandlers.Fixture;
 using EventSourcing.ExternalHandlers.RegistrationFixture;
@@ -15,27 +16,27 @@ public sealed class ReplayTests
     {
         using var provider = Services().BuildServiceProvider(Validated());
         using var scope = provider.CreateScope();
-        var first = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1");
-        var second = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v2");
+        var first = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("inventory/v1");
+        var second = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("inventory/v2");
         Assert.NotSame(first, second);
         Assert.Equal("inventory/v1", first.RuleVersion); Assert.Equal("inventory/v2", second.RuleVersion);
         var opening = new Inventory(new("Original", 10)); var e = new Received(Guid.NewGuid(), 2);
         Assert.Equal(16, first.Do(opening, e).OwnedItem.Quantity);
         Assert.Equal(14, second.Do(opening, e).OwnedItem.Quantity);
-        Assert.Throws<InvalidOperationException>(() => scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("missing"));
-        var store = new InMemoryEventStreamStore<InventoryEvent>();
-        var saved = await new EventStream<Inventory, InventoryEvent>(Guid.NewGuid(), opening, first).HandleAsync(e, store);
+        Assert.Throws<InvalidOperationException>(() => scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("missing"));
+        var store = new InMemoryEventStreamStore();
+        var saved = await new EventSourcedAggregate<Inventory>(Guid.NewGuid(), opening, first).HandleAsync(e, store);
         var history = await store.ReadAsync(saved.Id);
-        Assert.Equal(saved.State, EventStream<Inventory, InventoryEvent>.Replay(saved.Id,
+        Assert.Equal(saved.State, EventSourcedAggregate<Inventory>.Replay(saved.Id,
             new ReplayDefinition<Inventory>(opening, first.RuleVersion), first, history).State);
-        Assert.Throws<ReplayRuleVersionException>(() => EventStream<Inventory, InventoryEvent>.Replay(saved.Id,
+        Assert.Throws<ReplayRuleVersionException>(() => EventSourcedAggregate<Inventory>.Replay(saved.Id,
             new ReplayDefinition<Inventory>(opening, first.RuleVersion), second, history));
         var snapshot = saved.CaptureSnapshot(1);
         var slice = await store.ReadFromAsync(saved.Id, saved.Version);
-        Assert.Throws<ReplayRuleVersionException>(() => EventStream<Inventory, InventoryEvent>.Replay(snapshot, 1, second, slice));
-        Assert.Throws<SnapshotSchemaVersionException>(() => EventStream<Inventory, InventoryEvent>.Replay(snapshot, 2, first, slice));
-        Assert.Equal(saved.State, EventStream<Inventory, InventoryEvent>.Replay(snapshot, 1, first, slice).State);
-        Assert.Same(first, scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1"));
+        Assert.Throws<ReplayRuleVersionException>(() => EventSourcedAggregate<Inventory>.Replay(snapshot, 1, second, slice));
+        Assert.Throws<SnapshotSchemaVersionException>(() => EventSourcedAggregate<Inventory>.Replay(snapshot, 2, first, slice));
+        Assert.Equal(saved.State, EventSourcedAggregate<Inventory>.Replay(snapshot, 1, first, slice).State);
+        Assert.Same(first, scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("inventory/v1"));
     }
 
     [Fact]
@@ -51,8 +52,8 @@ public sealed class ReplayTests
             using (var provider = Services().BuildServiceProvider(Validated()))
             using (var scope = provider.CreateScope())
             {
-                var rules = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1");
-                var stream = new EventStream<Inventory, InventoryEvent>(id, opening, rules);
+                var rules = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("inventory/v1");
+                var stream = new EventSourcedAggregate<Inventory>(id, opening, rules);
                 var store = new InventoryJsonStore(path);
                 stream = await stream.Apply(new Received(receiptId, 2))
                     .Apply(new Renamed(Guid.NewGuid(), "Original", "Renamed")).SaveAsync(store);
@@ -63,13 +64,13 @@ public sealed class ReplayTests
             // A new container/scope resolves fresh handlers with the same immutable configuration.
             using var reopenedProvider = Services().BuildServiceProvider(Validated());
             using var reopenedScope = reopenedProvider.CreateScope();
-            var reopenedRules = reopenedScope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1");
+            var reopenedRules = reopenedScope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("inventory/v1");
             var reopenedStore = new InventoryJsonStore(path);
             var history = await reopenedStore.ReadAsync(id);
-            var full = EventStream<Inventory, InventoryEvent>.Replay(id,
+            var full = EventSourcedAggregate<Inventory>.Replay(id,
                 new ReplayDefinition<Inventory>(opening, reopenedRules.RuleVersion), reopenedRules, history);
             var snapshot = JsonSerializer.Deserialize<AggregateSnapshot<Inventory>>(await File.ReadAllTextAsync(snapshotPath))!;
-            var restored = EventStream<Inventory, InventoryEvent>.Replay(snapshot, 1, reopenedRules, await reopenedStore.ReadFromAsync(id, snapshot.StreamVersion));
+            var restored = EventSourcedAggregate<Inventory>.Replay(snapshot, 1, reopenedRules, await reopenedStore.ReadFromAsync(id, snapshot.StreamVersion));
             Assert.Equal(new Inventory(new Item("Renamed", 19)), expected);
             Assert.Equal(expected, full.State); Assert.Equal(expected, restored.State);
             Assert.Equal(version, full.Version); Assert.Equal(version, restored.Version);
@@ -84,21 +85,21 @@ public sealed class ReplayTests
     public void External_business_fixture_and_core_do_not_reference_DI_assemblies()
     {
         Assert.DoesNotContain(typeof(ReceiptHandler).Assembly.GetReferencedAssemblies(), a => a.Name!.Contains("DependencyInjection", StringComparison.Ordinal));
-        Assert.DoesNotContain(typeof(EventStream<,>).Assembly.GetReferencedAssemblies(), a => a.Name!.Contains("DependencyInjection", StringComparison.Ordinal));
+        Assert.DoesNotContain(typeof(EventStream).Assembly.GetReferencedAssemblies(), a => a.Name!.Contains("DependencyInjection", StringComparison.Ordinal));
     }
     private static IServiceCollection Services() => new ServiceCollection().AddFamilyHorizonAccounts()
-        .AddEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v2", h => h
+        .AddEventHandlerDispatcher<Inventory>("inventory/v2", h => h
             .AddHandler<Received, DoubleReceiptHandler>().AddHandler<Renamed, RenameHandler>());
     private static ServiceProviderOptions Validated() => new() { ValidateScopes = true, ValidateOnBuild = true };
 }
 
 // Single-writer fixture: stable discriminators; persistence behavior remains owned by the core/store contract.
-internal sealed class InventoryJsonStore(string path) : IEventStreamStore<InventoryEvent>
+internal sealed class InventoryJsonStore(string path) : IEventStreamStore
 {
     private sealed record Stored(Guid Id, Guid StreamId, long Version, string Kind, int Quantity, string? Previous, string? Next);
-    public async Task<IReadOnlyList<InventoryEvent>> ReadAsync(Guid streamId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<IEvent>> ReadAsync(Guid streamId, CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(path)) return Array.Empty<InventoryEvent>();
+        if (!File.Exists(path)) return Array.Empty<IEvent>();
         var stored = JsonSerializer.Deserialize<Stored[]>(await File.ReadAllTextAsync(path, cancellationToken))
             ?? throw new InvalidDataException("Null history.");
         var events = stored.Select(r =>
@@ -107,19 +108,19 @@ internal sealed class InventoryJsonStore(string path) : IEventStreamStore<Invent
             var metadata = new EventMetadata(r.Version, r.StreamId);
             return r.Kind switch
             {
-                "received/v1" => (InventoryEvent)new Received(r.Id, r.Quantity, metadata),
+                "received/v1" => (IEvent)new Received(r.Id, r.Quantity, metadata),
                 "renamed/v1" => new Renamed(r.Id, r.Previous!, r.Next!, metadata),
                 _ => throw new InvalidDataException("Unsupported event format.")
             };
         }).ToArray();
         EventHistory.Validate(streamId, events); return events;
     }
-    public async Task<StreamSlice<InventoryEvent>> ReadFromAsync(Guid streamId, long afterVersion, CancellationToken cancellationToken = default)
+    public async Task<StreamSlice> ReadFromAsync(Guid streamId, long afterVersion, CancellationToken cancellationToken = default)
     {
         var history = await ReadAsync(streamId, cancellationToken);
         return new(streamId, afterVersion, history.Count, history.Skip(checked((int)afterVersion)), history.Take(checked((int)afterVersion)).Select(e => e.Id));
     }
-    public async Task AppendAsync(Guid streamId, long expectedVersion, IReadOnlyList<InventoryEvent> events, CancellationToken cancellationToken = default)
+    public async Task AppendAsync(Guid streamId, long expectedVersion, IReadOnlyList<IEvent> events, CancellationToken cancellationToken = default)
     {
         var history = await ReadAsync(streamId, cancellationToken);
         if (history.Count != expectedVersion) throw new StreamConcurrencyException(expectedVersion, history.Count, streamId);

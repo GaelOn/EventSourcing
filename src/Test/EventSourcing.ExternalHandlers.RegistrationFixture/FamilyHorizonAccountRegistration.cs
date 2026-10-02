@@ -9,7 +9,7 @@ public static class FamilyHorizonAccountRegistration
 {
     public static IServiceCollection AddFamilyHorizonAccounts(this IServiceCollection services)
     {
-        services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1", h => h
+        services.AddEventHandlerDispatcher<Inventory>("inventory/v1", h => h
             .AddHandler<Received, ReceiptHandler>().AddHandler<Renamed, RenameHandler>());
         services.AddSingleton(new ReceiptConfiguration(3));
         return services;

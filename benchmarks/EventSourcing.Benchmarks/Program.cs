@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using System.Diagnostics;
 using System.Globalization;
 using EventSourcing;
@@ -14,9 +15,9 @@ static async Task Measure(int count, bool report)
     var events = Enumerable.Range(0, count).Select(_ => new AmountEvent(Guid.NewGuid(), 1m)).ToArray();
     foreach (var persist in new[] { false, true })
     {
-        var stream = new EventStream<Balance, AmountEvent>(Guid.NewGuid(), new(0m),
-            (state, e) => new(state.Amount + e.Amount));
-        var store = new InMemoryEventStreamStore<AmountEvent>();
+        var stream = new EventSourcedAggregate<Balance>(Guid.NewGuid(), new(0m),
+            new EventReducer<Balance>("balance/v1", (state, e) => new(state.Amount + ((AmountEvent)e).Amount)));
+        var store = new InMemoryEventStreamStore();
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();

@@ -7,6 +7,19 @@ namespace EventSourcing.Tests;
 
 public sealed class EventHandlerTests
 {
+    [Fact]
+    public void Abstract_event_mappings_are_rejected_at_registration()
+    {
+        var builder = EventHandlerDispatcher<Stock>.CreateBuilder("stock/v1");
+        Assert.Throws<ArgumentException>(() => builder.Register<AbstractEvent>(new AbstractHandler()));
+    }
+
+    private abstract class AbstractEvent(Guid id) : EventBase(id, new(null, null));
+    private sealed class AbstractHandler : IEventHandler<Stock, AbstractEvent>
+    {
+        public Stock Do(Stock state, AbstractEvent e) => state;
+        public Stock Undo(Stock state, AbstractEvent e) => state;
+    }
     private static readonly Guid StreamId = StreamTests.StreamId;
     private static readonly Guid FirstId = StreamTests.FirstId;
     private static readonly Guid SecondId = StreamTests.SecondId;
@@ -15,19 +28,19 @@ public sealed class EventHandlerTests
     public async Task Typed_handlers_produce_the_same_business_state_live_on_replay_and_after_a_snapshot()
     {
         var handler = new StockHandlers();
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
+        var dispatcher = EventHandlerDispatcher<Stock>.CreateBuilder("stock/v1")
             .Register<Received>(handler).Register<Shipped>(handler).Build();
         var opening = new Stock(10);
-        var store = new InMemoryEventStreamStore<StockEvent>();
+        var store = new InMemoryEventStreamStore();
         var snapshots = new InMemorySnapshotStore<Stock>();
-        var original = new EventStream<Stock, StockEvent>(StreamId, opening, dispatcher.Reduce);
+        var original = new EventSourcedAggregate<Stock>(StreamId, opening, "stock/v1", dispatcher.Reduce);
         var saved = await original.Apply(new Received(FirstId, 5)).SaveAsync(store);
         await snapshots.SaveAsync(saved.CaptureSnapshot("stock/v1", 1));
         var latest = await saved.Apply(new Shipped(SecondId, 2)).SaveAsync(store);
         var definition = new ReplayDefinition<Stock>(opening, "stock/v1");
-        var replayed = EventStream<Stock, StockEvent>.Replay(StreamId, definition,
+        var replayed = EventSourcedAggregate<Stock>.Replay(StreamId, definition,
             "stock/v1", dispatcher.Reduce, await store.ReadAsync(StreamId));
-        var loaded = await EventStream<Stock, StockEvent>.LoadAsync(StreamId, definition,
+        var loaded = await EventSourcedAggregate<Stock>.LoadAsync(StreamId, definition,
             "stock/v1", 1, dispatcher.Reduce, store, snapshots);
 
         Assert.Equal(new Stock(13), latest.State);
@@ -43,15 +56,15 @@ public sealed class EventHandlerTests
     [Fact]
     public async Task Business_root_composes_handlers_and_rejected_events_never_reach_storage()
     {
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
+        var dispatcher = EventHandlerDispatcher<Stock>.CreateBuilder("stock/v1")
             .Register<Received>(new StockHandlers()).Build();
-        var root = new StockRoot(new EventStream<Stock, StockEvent>(StreamId, new Stock(10), dispatcher.Reduce));
-        var store = new InMemoryEventStreamStore<StockEvent>();
-        var savedRoot = new StockRoot(await root.Stream.HandleAsync(new Received(FirstId, 5), store));
+        var root = new StockRoot(new EventSourcedAggregate<Stock>(StreamId, new Stock(10), "stock/v1", dispatcher.Reduce));
+        var store = new InMemoryEventStreamStore();
+        var savedRoot = new StockRoot(await root.HandleAsync(new Received(FirstId, 5), store));
         Assert.Equal(new Stock(15), savedRoot.State);
         Assert.Equal(new Stock(10), root.State);
         await Assert.ThrowsAsync<UnhandledEventException>(() =>
-            savedRoot.Stream.HandleAsync(new Shipped(SecondId, 2), store));
+            savedRoot.HandleAsync(new Shipped(SecondId, 2), store));
         Assert.Single(await store.ReadAsync(StreamId));
         Assert.Equal(1, savedRoot.PersistedVersion);
     }
@@ -59,7 +72,7 @@ public sealed class EventHandlerTests
     [Fact]
     public void Duplicate_registration_is_rejected_and_does_not_replace_the_handler()
     {
-        var builder = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
+        var builder = EventHandlerDispatcher<Stock>.CreateBuilder("stock/v1")
             .Register<Received>(new StockHandlers());
         Assert.Throws<ArgumentException>(() => builder.Register<Received>(new StockHandlers()));
         Assert.Equal(new Stock(15), builder.Build().Reduce(new Stock(10), new Received(FirstId, 5)));
@@ -68,7 +81,7 @@ public sealed class EventHandlerTests
     [Fact]
     public void Built_dispatcher_is_unaffected_by_later_builder_registration()
     {
-        var builder = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
+        var builder = EventHandlerDispatcher<Stock>.CreateBuilder("stock/v1")
             .Register<Received>(new StockHandlers());
         var first = builder.Build();
         builder.Register<Shipped>(new StockHandlers());
@@ -80,9 +93,9 @@ public sealed class EventHandlerTests
     [Fact]
     public void Dispatch_uses_exact_runtime_type_and_never_silently_ignores_an_event()
     {
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
+        var dispatcher = EventHandlerDispatcher<Stock>.CreateBuilder("stock/v1")
             .Register<StockEvent>(new FallbackHandler()).Build();
-        var stream = new EventStream<Stock, StockEvent>(StreamId, new Stock(10), dispatcher.Reduce);
+        var stream = new EventSourcedAggregate<Stock>(StreamId, new Stock(10), "stock/v1", dispatcher.Reduce);
         var error = Assert.Throws<UnhandledEventException>(() => stream.Apply(new Received(FirstId, 5)));
         Assert.Equal(typeof(Received), error.EventType);
         Assert.Equal(new Stock(10), stream.State);
@@ -92,9 +105,9 @@ public sealed class EventHandlerTests
     [Fact]
     public void Business_failure_preserves_the_original_branch()
     {
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
+        var dispatcher = EventHandlerDispatcher<Stock>.CreateBuilder("stock/v1")
             .Register<Shipped>(new StockHandlers()).Build();
-        var stream = new EventStream<Stock, StockEvent>(StreamId, new Stock(1), dispatcher.Reduce);
+        var stream = new EventSourcedAggregate<Stock>(StreamId, new Stock(1), "stock/v1", dispatcher.Reduce);
         Assert.Throws<InvalidOperationException>(() => stream.Apply(new Shipped(FirstId, 2)));
         Assert.Equal(new Stock(1), stream.State);
         Assert.Equal(0, stream.Version);
@@ -104,7 +117,7 @@ public sealed class EventHandlerTests
     [Fact]
     public void Null_arguments_and_null_handler_results_are_rejected()
     {
-        var builder = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1");
+        var builder = EventHandlerDispatcher<Stock>.CreateBuilder("stock/v1");
         Assert.Throws<ArgumentNullException>(() => builder.Register<Received>(null!));
         var dispatcher = builder.Register<Received>(new NullHandler()).Build();
         Assert.Throws<ArgumentNullException>(() => dispatcher.Reduce(null!, new Received(FirstId, 1)));
@@ -115,22 +128,23 @@ public sealed class EventHandlerTests
     [Fact]
     public void Immutable_dispatcher_can_reduce_independent_states_concurrently()
     {
-        var dispatcher = EventHandlerDispatcher<Stock, StockEvent>.CreateBuilder("stock/v1")
+        var dispatcher = EventHandlerDispatcher<Stock>.CreateBuilder("stock/v1")
             .Register<Received>(new StockHandlers()).Build();
         Parallel.For(0, 100, i => Assert.Equal(new Stock(i + 5),
             dispatcher.Reduce(new Stock(i), new Received(FirstId, 5))));
     }
 
-    private sealed class StockRoot(EventStream<Stock, StockEvent> stream)
-        : EventSourcedAggregate<Stock, StockEvent>(stream)
+    private sealed class StockRoot(EventSourcedAggregate<Stock> stream)
+        : EventSourcedAggregate<Stock>(stream)
     {
         public override IEnumerable<IEntity> Entities => Array.Empty<IEntity>();
     }
     private sealed record Stock(int Quantity);
-    private abstract class StockEvent(Guid id, int quantity, EventMetadata? metadata)
+    private class StockEvent(Guid id, int quantity, EventMetadata? metadata)
         : EventBase<StockEvent>(id, metadata ?? new(null, null))
     {
         public int Quantity { get; } = quantity;
+        public override StockEvent Clone(EventMetadata metadata) => new StockEvent(Id, Quantity, metadata);
     }
     private sealed class Received(Guid id, int quantity, EventMetadata? metadata = null)
         : StockEvent(id, quantity, metadata)

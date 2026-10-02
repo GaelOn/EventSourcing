@@ -7,28 +7,27 @@ namespace EventSourcing.Streams;
 /// Thread-safe, non-durable store. Share one instance for one ledger; independent instances are separate ledgers.
 /// Event payloads must be immutable. Batch reads and writes are serialized by the same gate.
 /// </summary>
-public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<TEvent>
-    where TEvent : class, IEvent<TEvent>
+public sealed class InMemoryEventStreamStore : IAtomicEventStreamStore
 {
     private readonly object _gate = new();
     private ImmutableDictionary<Guid, StoredStream> _streams = ImmutableDictionary<Guid, StoredStream>.Empty;
 
-    private sealed record StoredStream(ImmutableList<TEvent> History, ImmutableHashSet<Guid> EventIds)
+    private sealed record StoredStream(ImmutableList<IEvent> History, ImmutableHashSet<Guid> EventIds)
     {
-        public static StoredStream Empty { get; } = new(ImmutableList<TEvent>.Empty, ImmutableHashSet<Guid>.Empty);
+        public static StoredStream Empty { get; } = new(ImmutableList<IEvent>.Empty, ImmutableHashSet<Guid>.Empty);
     }
 
     /// <summary>Read committed history from a consistent storage view.</summary>
-    public async Task<IReadOnlyList<TEvent>> ReadAsync(Guid streamId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<IEvent>> ReadAsync(Guid streamId, CancellationToken cancellationToken = default)
         => (await ReadBatchAsync(new[] { streamId }, cancellationToken))[streamId];
 
     /// <summary>Read a committed suffix and earlier identities from one consistent view.</summary>
-    public async Task<StreamSlice<TEvent>> ReadFromAsync(Guid streamId, long afterVersion,
+    public async Task<StreamSlice> ReadFromAsync(Guid streamId, long afterVersion,
         CancellationToken cancellationToken = default) =>
         (await ReadBatchFromAsync(new[] { new StreamReadRequest(streamId, afterVersion) }, cancellationToken))[streamId];
 
     /// <summary>Read suffixes and earlier identities for all participants from one consistent view.</summary>
-    public Task<IReadOnlyDictionary<Guid, StreamSlice<TEvent>>> ReadBatchFromAsync(
+    public Task<IReadOnlyDictionary<Guid, StreamSlice>> ReadBatchFromAsync(
         IReadOnlyList<StreamReadRequest> requests, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(requests);
@@ -42,7 +41,7 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
         lock (_gate)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var result = new Dictionary<Guid, StreamSlice<TEvent>>();
+            var result = new Dictionary<Guid, StreamSlice>();
             foreach (var request in participants)
             {
                 var stored = _streams.GetValueOrDefault(request.StreamId) ?? StoredStream.Empty;
@@ -53,13 +52,13 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
                     stored.History.GetRange(offset, stored.History.Count - offset),
                     stored.History.Take(offset).Select(e => e.Id)));
             }
-            return Task.FromResult<IReadOnlyDictionary<Guid, StreamSlice<TEvent>>>(
-                new ReadOnlyDictionary<Guid, StreamSlice<TEvent>>(result));
+            return Task.FromResult<IReadOnlyDictionary<Guid, StreamSlice>>(
+                new ReadOnlyDictionary<Guid, StreamSlice>(result));
         }
     }
 
     /// <summary>Read all requested streams from one consistent storage view.</summary>
-    public Task<IReadOnlyDictionary<Guid, IReadOnlyList<TEvent>>> ReadBatchAsync(IReadOnlyList<Guid> streamIds,
+    public Task<IReadOnlyDictionary<Guid, IReadOnlyList<IEvent>>> ReadBatchAsync(IReadOnlyList<Guid> streamIds,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(streamIds);
@@ -69,19 +68,19 @@ public sealed class InMemoryEventStreamStore<TEvent> : IAtomicEventStreamStore<T
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = ids.Distinct().ToDictionary(id => id,
-                id => (IReadOnlyList<TEvent>)(_streams.GetValueOrDefault(id) ?? StoredStream.Empty).History);
-            return Task.FromResult<IReadOnlyDictionary<Guid, IReadOnlyList<TEvent>>>(
-                new ReadOnlyDictionary<Guid, IReadOnlyList<TEvent>>(snapshot));
+                id => (IReadOnlyList<IEvent>)(_streams.GetValueOrDefault(id) ?? StoredStream.Empty).History);
+            return Task.FromResult<IReadOnlyDictionary<Guid, IReadOnlyList<IEvent>>>(
+                new ReadOnlyDictionary<Guid, IReadOnlyList<IEvent>>(snapshot));
         }
     }
 
     /// <summary>Atomically validate expected version and identities before appending the complete event batch.</summary>
-    public Task AppendAsync(Guid streamId, long expectedVersion, IReadOnlyList<TEvent> events,
+    public Task AppendAsync(Guid streamId, long expectedVersion, IReadOnlyList<IEvent> events,
         CancellationToken cancellationToken = default) =>
-        AppendBatchAsync(new[] { new StreamAppend<TEvent>(streamId, expectedVersion, events) }, cancellationToken);
+        AppendBatchAsync(new[] { new StreamAppend(streamId, expectedVersion, events) }, cancellationToken);
 
     /// <summary>Atomically validate every participant and commit all appends or none.</summary>
-    public Task AppendBatchAsync(IReadOnlyList<StreamAppend<TEvent>> appends,
+    public Task AppendBatchAsync(IReadOnlyList<StreamAppend> appends,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(appends);

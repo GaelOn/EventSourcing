@@ -11,14 +11,14 @@ public sealed class AggregateSnapshotTests
     [Fact]
     public async Task A_supported_aggregate_restores_root_information_and_owned_entities_from_a_snapshot()
     {
-        Assert.Null(typeof(EventSourcedAggregate<Household, LedgerEvent>).GetCustomAttribute<ObsoleteAttribute>());
-        var store = new InMemoryEventStreamStore<LedgerEvent>();
+        Assert.Null(typeof(EventSourcedAggregate<Household>).GetCustomAttribute<ObsoleteAttribute>());
+        var store = new InMemoryEventStreamStore();
         var root = HouseholdAggregate.Create(StreamTests.StreamId, "Family", 100m);
         var saved = await root.Apply(new LedgerEvent(StreamTests.FirstId, 25m)).SaveAsync(store);
         var snapshot = saved.CaptureSnapshot("household/v1", 1);
         var suffix = await store.ReadFromAsync(saved.Id, snapshot.StreamVersion);
 
-        var restored = new HouseholdAggregate(EventStream<Household, LedgerEvent>.Replay(snapshot,
+        var restored = new HouseholdAggregate(EventSourcedAggregate<Household>.Replay(snapshot,
             "household/v1", 1, HouseholdAggregate.Reduce, suffix));
 
         Assert.Equal("Family", restored.Name);
@@ -43,7 +43,7 @@ public sealed class AggregateSnapshotTests
             var saved = await root.Apply(new LedgerEvent(StreamTests.FirstId, 25m)).SaveAsync(store);
             await saved.SaveSnapshotAsync(new JsonSnapshotStore<Household>(path), "household/v1", 1);
 
-            var restoredStream = await EventStream<Household, LedgerEvent>.LoadAsync(saved.Id,
+            var restoredStream = await EventSourcedAggregate<Household>.LoadAsync(saved.Id,
                 new ReplayDefinition<Household>(root.State, "household/v1"), "household/v1", 1,
                 (_, _) => throw new InvalidOperationException("No old event should be reduced."),
                 new JsonLedgerStore(Path.Combine(directory, "ledger.json")), new JsonSnapshotStore<Household>(path));
@@ -66,25 +66,22 @@ public sealed class AggregateSnapshotTests
 internal sealed record AccountEntity(string Name, string Currency, decimal Balance) : IEntity;
 internal sealed record Household(string Name, ImmutableList<AccountEntity> Accounts);
 
-internal sealed class HouseholdAggregate(EventStream<Household, LedgerEvent> stream)
-    : EventSourcedAggregate<Household, LedgerEvent>(stream)
+internal sealed class HouseholdAggregate(EventSourcedAggregate<Household> stream)
+    : EventSourcedAggregate<Household>(stream)
 {
     public string Name => State.Name;
     public IReadOnlyList<AccountEntity> Accounts => State.Accounts;
     public override IEnumerable<IEntity> Entities => State.Accounts;
 
     public static HouseholdAggregate Create(Guid id, string name, decimal balance) => new(
-        new EventStream<Household, LedgerEvent>(id,
-            new(name, ImmutableList.Create(new AccountEntity("Checking", "EUR", balance))), Reduce));
+        new EventSourcedAggregate<Household>(id,
+            new(name, ImmutableList.Create(new AccountEntity("Checking", "EUR", balance))), "household/v1", Reduce));
 
-    public HouseholdAggregate Apply(LedgerEvent e) => new(Stream.Apply(e));
+    public HouseholdAggregate Apply(LedgerEvent e) => (HouseholdAggregate)base.Apply(e);
 
-    public async Task<HouseholdAggregate> SaveAsync(IEventStreamStore<LedgerEvent> store) =>
-        new(await Stream.SaveAsync(store));
-
-    public static Household Reduce(Household state, LedgerEvent e)
+    public static Household Reduce(Household state, IEvent e)
     {
         var checking = state.Accounts[0];
-        return state with { Accounts = state.Accounts.SetItem(0, checking with { Balance = checking.Balance + e.Amount }) };
+        return state with { Accounts = state.Accounts.SetItem(0, checking with { Balance = checking.Balance + ((LedgerEvent)e).Amount }) };
     }
 }

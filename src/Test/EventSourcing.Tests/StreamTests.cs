@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using EventSourcing.Streams;
 
 namespace EventSourcing.Tests;
@@ -7,8 +8,8 @@ public sealed class StreamTests
     internal static readonly Guid StreamId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     internal static readonly Guid FirstId = Guid.Parse("22222222-2222-2222-2222-222222222222");
     internal static readonly Guid SecondId = Guid.Parse("33333333-3333-3333-3333-333333333333");
-    internal static EventStream<Balance, LedgerEvent> Create() => new(StreamId, new Balance(100m), Reduce);
-    internal static Balance Reduce(Balance state, LedgerEvent @event) => new(state.Amount + @event.Amount);
+    internal static EventSourcedAggregate<Balance> Create() => new(StreamId, new Balance(100m), "balance/v1", Reduce);
+    internal static Balance Reduce(Balance state, IEvent @event) => new(state.Amount + ((LedgerEvent)@event).Amount);
 
     [Fact]
     public void Identity_is_preserved_while_versions_follow_acceptance_order()
@@ -41,7 +42,7 @@ public sealed class StreamTests
     {
         var live = Create().Apply(new LedgerEvent(FirstId, 25m)).Apply(new LedgerEvent(SecondId, -10m));
         var calls = 0;
-        var replayed = EventStream<Balance, LedgerEvent>.Replay(StreamId, new Balance(100m),
+        var replayed = EventSourcedAggregate<Balance>.Replay(StreamId, new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1",
             (state, e) => { calls++; return Reduce(state, e); }, live.Events);
 
         Assert.Equal(live.State, replayed.State);
@@ -65,13 +66,13 @@ public sealed class StreamTests
             _ => new LedgerEvent(FirstId, 1m, new(2, StreamId))
         };
         Assert.ThrowsAny<InvalidOperationException>(() =>
-            EventStream<Balance, LedgerEvent>.Replay(StreamId, new Balance(100m), Reduce, [first, second]));
+            EventSourcedAggregate<Balance>.Replay(StreamId, new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1", Reduce, [first, second]));
     }
 
     [Fact]
     public void Reducer_failure_leaves_original_state_and_history_unchanged()
     {
-        var stream = new EventStream<Balance, LedgerEvent>(StreamId, new Balance(100m),
+        var stream = new EventSourcedAggregate<Balance>(StreamId, new Balance(100m), "balance/v1",
             (state, e) => throw new InvalidOperationException("Rejected"));
         Assert.Throws<InvalidOperationException>(() => stream.Apply(new LedgerEvent(FirstId, 1m)));
         Assert.Equal(100m, stream.State.Amount);
@@ -87,7 +88,7 @@ public sealed class StreamTests
     public void Recorded_events_cannot_be_reassigned_to_another_stream()
     {
         var recorded = Assert.Single(Create().Apply(new LedgerEvent(FirstId, 10m)).Events);
-        var another = new EventStream<Balance, LedgerEvent>(SecondId, new Balance(0m), Reduce);
+        var another = new EventSourcedAggregate<Balance>(SecondId, new Balance(0m), "balance/v1", Reduce);
         Assert.Throws<InvalidOperationException>(() => another.Apply(recorded));
         Assert.Empty(another.Events);
     }
@@ -95,7 +96,7 @@ public sealed class StreamTests
     [Fact]
     public async Task Saving_and_branching_retain_history_but_only_new_events_remain_pending()
     {
-        var store = new InMemoryEventStreamStore<LedgerEvent>();
+        var store = new InMemoryEventStreamStore();
         var pending = Create().Apply(new LedgerEvent(FirstId, 25m));
         var saved = await pending.SaveAsync(store);
         var branch = saved.Apply(new LedgerEvent(SecondId, -10m));

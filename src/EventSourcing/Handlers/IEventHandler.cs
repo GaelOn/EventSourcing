@@ -1,7 +1,7 @@
 namespace EventSourcing.Handlers;
 
 /// <summary>Pure, reentrant transitions with immutable inputs and configuration; neither operation may perform I/O.</summary>
-public interface IEventHandler<TState, in TEvent> where TState : class where TEvent : class
+public interface IEventHandler<TState, in TEvent> where TState : class where TEvent : class, IEvent
 {
     /// <summary>Apply an event after checking its business preconditions.</summary>
     TState Do(TState state, TEvent @event);

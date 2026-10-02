@@ -11,22 +11,22 @@ public static class EventHandlerServiceCollectionExtensions
     /// before publication; duplicate rule sets fail rather than replacing an existing keyed dispatcher.
     /// Scoped is the default lifetime. Enable container scope validation to detect captive dependencies.
     /// </summary>
-    public static IServiceCollection AddEventHandlerDispatcher<TState, TEvent>(this IServiceCollection services,
-        string ruleVersion, Action<EventHandlerRegistrationBuilder<TState, TEvent>> configure,
+    public static IServiceCollection AddEventHandlerDispatcher<TState>(this IServiceCollection services,
+        string ruleVersion, Action<EventHandlerRegistrationBuilder<TState>> configure,
         ServiceLifetime dispatcherLifetime = ServiceLifetime.Scoped)
-        where TState : class where TEvent : class, IEvent<TEvent>
+        where TState : class
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(ruleVersion);
         ArgumentNullException.ThrowIfNull(configure);
         ValidateLifetime(dispatcherLifetime);
-        var dispatcherType = typeof(EventHandlerDispatcher<TState, TEvent>);
+        var dispatcherType = typeof(EventHandlerDispatcher<TState>);
         if (services.Any(d => d.ServiceType == dispatcherType && d.IsKeyedService && Equals(d.ServiceKey, ruleVersion)))
-            throw new ArgumentException($"Dispatcher rules '{ruleVersion}' are already registered for '{typeof(TState)}' and '{typeof(TEvent)}'.", nameof(ruleVersion));
-        var builder = new EventHandlerRegistrationBuilder<TState, TEvent>();
+            throw new ArgumentException($"Dispatcher rules '{ruleVersion}' are already registered for '{typeof(TState)}'.", nameof(ruleVersion));
+        var builder = new EventHandlerRegistrationBuilder<TState>();
         configure(builder);
         var handlers = builder.Freeze();
-        var key = new HandlerRegistrationKey(typeof(TState), typeof(TEvent), ruleVersion);
+        var key = new HandlerRegistrationKey(typeof(TState), ruleVersion);
         var descriptors = handlers.GroupBy(h => h.HandlerType).Select(g =>
             ServiceDescriptor.DescribeKeyed(g.Key, key, g.Key, g.First().Lifetime)).ToArray();
         services.Add(ServiceDescriptor.DescribeKeyed(typeof(DispatcherLease), key, (_, _) => new DispatcherLease(), dispatcherLifetime));
@@ -34,7 +34,7 @@ public static class EventHandlerServiceCollectionExtensions
         services.Add(ServiceDescriptor.DescribeKeyed(dispatcherType, ruleVersion, (provider, _) =>
         {
             var lease = provider.GetRequiredKeyedService<DispatcherLease>(key);
-            var dispatcher = EventHandlerDispatcher<TState, TEvent>.CreateBuilder(ruleVersion);
+            var dispatcher = EventHandlerDispatcher<TState>.CreateBuilder(ruleVersion);
             var retained = new Dictionary<Type, object>();
             foreach (var handler in handlers) handler.Register(dispatcher, provider, key, lease, retained);
             return dispatcher.Build();
@@ -43,30 +43,30 @@ public static class EventHandlerServiceCollectionExtensions
     }
 
     /// <summary>Resolve the requested rule version from the current scope; never select or replace a default silently.</summary>
-    public static EventHandlerDispatcher<TState, TEvent> GetEventHandlerDispatcher<TState, TEvent>(
+    public static EventHandlerDispatcher<TState> GetEventHandlerDispatcher<TState>(
         this IServiceProvider provider, string ruleVersion)
-        where TState : class where TEvent : class, IEvent<TEvent>
+        where TState : class
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentException.ThrowIfNullOrWhiteSpace(ruleVersion);
-        return provider.GetRequiredKeyedService<EventHandlerDispatcher<TState, TEvent>>(ruleVersion);
+        return provider.GetRequiredKeyedService<EventHandlerDispatcher<TState>>(ruleVersion);
     }
 
     internal static void ValidateLifetime(ServiceLifetime lifetime)
     {
         if (!Enum.IsDefined(lifetime)) throw new ArgumentOutOfRangeException(nameof(lifetime));
     }
-    private sealed record HandlerRegistrationKey(Type State, Type StreamEvent, string RuleVersion);
+    private sealed record HandlerRegistrationKey(Type State, string RuleVersion);
 }
 
 /// <summary>
 /// Fluent, single-threaded startup builder. Handlers and their configuration must remain pure and immutable.
 /// A handler implementing multiple event interfaces is retained once per dispatcher construction.
 /// </summary>
-public sealed class EventHandlerRegistrationBuilder<TState, TEvent>
-    where TState : class where TEvent : class, IEvent<TEvent>
+public sealed class EventHandlerRegistrationBuilder<TState>
+    where TState : class
 {
-    private readonly List<IHandlerRegistration<TState, TEvent>> _handlers = [];
+    private readonly List<IHandlerRegistration<TState>> _handlers = [];
     private bool _frozen;
     internal EventHandlerRegistrationBuilder() { }
 
@@ -74,45 +74,47 @@ public sealed class EventHandlerRegistrationBuilder<TState, TEvent>
     /// Map one concrete event to a constructor-injected handler with an explicit lifetime. Reusing a handler
     /// type for several event interfaces requires the same lifetime and retains the same instance.
     /// </summary>
-    public EventHandlerRegistrationBuilder<TState, TEvent> AddHandler<THandledEvent, THandler>(
+    public EventHandlerRegistrationBuilder<TState> AddHandler<THandledEvent, THandler>(
         ServiceLifetime lifetime = ServiceLifetime.Scoped)
-        where THandledEvent : class, TEvent where THandler : class, IEventHandler<TState, THandledEvent>
+        where THandledEvent : class, IEvent where THandler : class, IEventHandler<TState, THandledEvent>
     {
         if (_frozen) throw new InvalidOperationException("Dispatcher registrations are frozen.");
         EventHandlerServiceCollectionExtensions.ValidateLifetime(lifetime);
+        if (typeof(THandledEvent).IsAbstract || typeof(THandledEvent).IsInterface)
+            throw new ArgumentException("Event registrations require a concrete event class.", nameof(THandledEvent));
         if (typeof(THandler).IsAbstract || typeof(THandler).IsInterface)
             throw new ArgumentException("Handler implementations must be concrete.", nameof(THandler));
         if (_handlers.Any(h => h.EventType == typeof(THandledEvent)))
             throw new ArgumentException($"A handler is already registered for '{typeof(THandledEvent)}'.", nameof(THandledEvent));
         if (_handlers.Any(h => h.HandlerType == typeof(THandler) && h.Lifetime != lifetime))
             throw new ArgumentException("All mappings for one handler implementation must use the same lifetime.", nameof(lifetime));
-        _handlers.Add(new HandlerRegistration<TState, TEvent, THandledEvent, THandler>(lifetime));
+        _handlers.Add(new HandlerRegistration<TState, THandledEvent, THandler>(lifetime));
         return this;
     }
 
-    internal IHandlerRegistration<TState, TEvent>[] Freeze()
+    internal IHandlerRegistration<TState>[] Freeze()
     { _frozen = true; return _handlers.ToArray(); }
 }
 
-internal interface IHandlerRegistration<TState, TEvent>
-    where TState : class where TEvent : class, IEvent<TEvent>
+internal interface IHandlerRegistration<TState>
+    where TState : class
 {
     Type EventType { get; }
     Type HandlerType { get; }
     ServiceLifetime Lifetime { get; }
-    void Register(EventHandlerDispatcherBuilder<TState, TEvent> dispatcher, IServiceProvider provider,
+    void Register(EventHandlerDispatcherBuilder<TState> dispatcher, IServiceProvider provider,
         object key, DispatcherLease lease, Dictionary<Type, object> retained);
 }
 
-internal sealed class HandlerRegistration<TState, TEvent, THandledEvent, THandler>(ServiceLifetime lifetime)
-    : IHandlerRegistration<TState, TEvent>
-    where TState : class where TEvent : class, IEvent<TEvent>
-    where THandledEvent : class, TEvent where THandler : class, IEventHandler<TState, THandledEvent>
+internal sealed class HandlerRegistration<TState, THandledEvent, THandler>(ServiceLifetime lifetime)
+    : IHandlerRegistration<TState>
+    where TState : class
+    where THandledEvent : class, IEvent where THandler : class, IEventHandler<TState, THandledEvent>
 {
     public Type EventType => typeof(THandledEvent);
     public Type HandlerType => typeof(THandler);
     public ServiceLifetime Lifetime => lifetime;
-    public void Register(EventHandlerDispatcherBuilder<TState, TEvent> dispatcher, IServiceProvider provider,
+    public void Register(EventHandlerDispatcherBuilder<TState> dispatcher, IServiceProvider provider,
         object key, DispatcherLease lease, Dictionary<Type, object> retained)
     {
         if (!retained.TryGetValue(typeof(THandler), out var instance))
@@ -125,7 +127,7 @@ internal sealed class HandlerRegistration<TState, TEvent, THandledEvent, THandle
 }
 
 internal sealed class RetainedHandler<TState, TEvent>(IEventHandler<TState, TEvent> handler, DispatcherLease lease)
-    : IEventHandler<TState, TEvent> where TState : class where TEvent : class
+    : IEventHandler<TState, TEvent> where TState : class where TEvent : class, IEvent
 {
     public TState Do(TState state, TEvent e) { lease.EnsureActive(); return handler.Do(state, e); }
     public TState Undo(TState state, TEvent e) { lease.EnsureActive(); return handler.Undo(state, e); }

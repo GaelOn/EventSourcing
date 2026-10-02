@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using EventSourcing.Snapshots;
 using EventSourcing.Streams;
 
@@ -8,14 +9,14 @@ public sealed class SnapshotTests
     [Fact]
     public async Task Snapshot_loading_reduces_only_later_events_and_preserves_the_full_stream_position()
     {
-        var store = new InMemoryEventStreamStore<LedgerEvent>();
+        var store = new InMemoryEventStreamStore();
         var saved = await StreamTests.Create().HandleAsync(new LedgerEvent(StreamTests.FirstId, 25m), store);
         var snapshot = saved.CaptureSnapshot("balance/v1", 1);
         await saved.HandleAsync(new LedgerEvent(StreamTests.SecondId, -10m), store);
         var suffix = await store.ReadFromAsync(saved.Id, snapshot.StreamVersion);
         var calls = 0;
 
-        var restored = EventStream<Balance, LedgerEvent>.Replay(snapshot, "balance/v1", 1,
+        var restored = EventSourcedAggregate<Balance>.Replay(snapshot, "balance/v1", 1,
             (state, e) => { calls++; return StreamTests.Reduce(state, e); }, suffix);
 
         Assert.Equal(115m, restored.State.Amount);
@@ -35,13 +36,13 @@ public sealed class SnapshotTests
     [Fact]
     public async Task A_snapshot_at_the_current_version_needs_no_reduction_and_retains_duplicate_protection()
     {
-        var store = new InMemoryEventStreamStore<LedgerEvent>();
+        var store = new InMemoryEventStreamStore();
         var saved = await StreamTests.Create().HandleAsync(new LedgerEvent(StreamTests.FirstId, 25m), store);
         var snapshot = saved.CaptureSnapshot("balance/v1", 1);
         var suffix = await store.ReadFromAsync(saved.Id, snapshot.StreamVersion);
         var calls = 0;
 
-        var restored = EventStream<Balance, LedgerEvent>.Replay(snapshot, "balance/v1", 1,
+        var restored = EventSourcedAggregate<Balance>.Replay(snapshot, "balance/v1", 1,
             (state, e) => { calls++; return StreamTests.Reduce(state, e); }, suffix);
 
         Assert.Empty(restored.Events);
@@ -86,13 +87,13 @@ public sealed class SnapshotTests
         var prefix = invalidCase == 3 ? Array.Empty<Guid>() : new[] { firstId };
 
         Assert.ThrowsAny<InvalidOperationException>(() =>
-            new StreamSlice<LedgerEvent>(id, 1, 2, new[] { suffix }, prefix));
+            new StreamSlice(id, 1, 2, new[] { suffix }, prefix));
     }
 
     [Fact]
     public void A_truncated_suffix_cannot_claim_a_later_storage_version()
     {
-        Assert.Throws<InvalidOperationException>(() => new StreamSlice<LedgerEvent>(StreamTests.StreamId,
+        Assert.Throws<InvalidOperationException>(() => new StreamSlice(StreamTests.StreamId,
             1, 3, new[] { new LedgerEvent(StreamTests.SecondId, 1m, new(2, StreamTests.StreamId)) },
             new[] { StreamTests.FirstId }));
     }
@@ -107,11 +108,11 @@ public sealed class SnapshotTests
         var id = StreamTests.StreamId;
         var snapshot = new AggregateSnapshot<Balance>(invalidCase == 0 ? Guid.NewGuid() : id,
             invalidCase == 1 ? 0 : 1, new Balance(125m), "balance/v1", 1);
-        var suffix = new StreamSlice<LedgerEvent>(id, 1, 2,
+        var suffix = new StreamSlice(id, 1, 2,
             new[] { new LedgerEvent(StreamTests.SecondId, -10m, new(2, id)) }, new[] { StreamTests.FirstId });
         var calls = 0;
 
-        Assert.ThrowsAny<InvalidOperationException>(() => EventStream<Balance, LedgerEvent>.Replay(snapshot,
+        Assert.ThrowsAny<InvalidOperationException>(() => EventSourcedAggregate<Balance>.Replay(snapshot,
             invalidCase == 2 ? "balance/v2" : "balance/v1", invalidCase == 3 ? 2 : 1,
             (state, e) => { calls++; return StreamTests.Reduce(state, e); }, suffix));
 
@@ -121,10 +122,10 @@ public sealed class SnapshotTests
     [Fact]
     public async Task Changes_after_snapshot_restore_save_at_the_actual_version_and_preserve_old_history()
     {
-        var store = new InMemoryEventStreamStore<LedgerEvent>();
+        var store = new InMemoryEventStreamStore();
         var saved = await StreamTests.Create().HandleAsync(new LedgerEvent(StreamTests.FirstId, 25m), store);
         var snapshot = saved.CaptureSnapshot("balance/v1", 1);
-        var restored = EventStream<Balance, LedgerEvent>.Replay(snapshot, "balance/v1", 1,
+        var restored = EventSourcedAggregate<Balance>.Replay(snapshot, "balance/v1", 1,
             StreamTests.Reduce, await store.ReadFromAsync(saved.Id, 1));
         var changed = restored.Apply(new LedgerEvent(StreamTests.SecondId, -10m));
 
@@ -144,13 +145,13 @@ public sealed class SnapshotTests
     [Fact]
     public async Task A_failed_suffix_reducer_leaves_the_checkpoint_and_storage_unchanged()
     {
-        var store = new InMemoryEventStreamStore<LedgerEvent>();
+        var store = new InMemoryEventStreamStore();
         var saved = await StreamTests.Create().HandleAsync(new LedgerEvent(StreamTests.FirstId, 25m), store);
         var snapshot = saved.CaptureSnapshot("balance/v1", 1);
         await saved.HandleAsync(new LedgerEvent(StreamTests.SecondId, -10m), store);
         var suffix = await store.ReadFromAsync(saved.Id, 1);
 
-        Assert.Throws<InvalidOperationException>(() => EventStream<Balance, LedgerEvent>.Replay(snapshot,
+        Assert.Throws<InvalidOperationException>(() => EventSourcedAggregate<Balance>.Replay(snapshot,
             "balance/v1", 1, (_, _) => throw new InvalidOperationException("Rejected."), suffix));
 
         Assert.Equal(125m, snapshot.State.Amount);
@@ -160,10 +161,10 @@ public sealed class SnapshotTests
     [Fact]
     public async Task A_stale_restored_branch_preserves_its_checkpoint_cursor_and_pending_changes()
     {
-        var store = new InMemoryEventStreamStore<LedgerEvent>();
+        var store = new InMemoryEventStreamStore();
         var saved = await StreamTests.Create().HandleAsync(new LedgerEvent(StreamTests.FirstId, 25m), store);
         var snapshot = saved.CaptureSnapshot("balance/v1", 1);
-        var restored = EventStream<Balance, LedgerEvent>.Replay(snapshot, "balance/v1", 1,
+        var restored = EventSourcedAggregate<Balance>.Replay(snapshot, "balance/v1", 1,
             StreamTests.Reduce, await store.ReadFromAsync(saved.Id, 1));
         var pending = restored.Apply(new LedgerEvent(StreamTests.SecondId, -10m));
         await saved.HandleAsync(new LedgerEvent(Guid.NewGuid(), 5m), store);

@@ -10,8 +10,8 @@ public sealed class RefinementTests
     public void A_clone_changing_type_is_rejected_before_reduction_and_preserves_pending_work()
     {
         var calls = 0;
-        var stream = new EventStream<Value, Change>(StreamTests.StreamId, new Value(10),
-            new EventReducer<Value, Change>("value/v1", (s, e) => { calls++; return new(s.Amount + 1); }));
+        var stream = new EventSourcedAggregate<Value>(StreamTests.StreamId, new Value(10),
+            new EventReducer<Value>("value/v1", (s, e) => { calls++; return new(s.Amount + 1); }));
         var pending = stream.Apply(new GoodChange(StreamTests.FirstId));
         var error = Assert.Throws<EventCloneException>(() => pending.Apply(new BadChange(StreamTests.SecondId)));
         Assert.Equal(StreamTests.SecondId, error.EventId);
@@ -27,7 +27,7 @@ public sealed class RefinementTests
     [Fact]
     public void Immediate_reversal_restores_previous_values_without_mutating_inputs()
     {
-        var dispatcher = EventHandlerDispatcher<Value, Change>.CreateBuilder("value/v1")
+        var dispatcher = EventHandlerDispatcher<Value>.CreateBuilder("value/v1")
             .Register<Replacement>(new ReplacementHandler()).Build();
         var original = new Value(10);
         var e = new Replacement(StreamTests.FirstId, 10, 25);
@@ -42,41 +42,41 @@ public sealed class RefinementTests
     [Fact]
     public async Task Persisted_cancellation_appends_compensation_and_retains_the_original_event()
     {
-        var dispatcher = EventHandlerDispatcher<Value, Change>.CreateBuilder("value/v1")
+        var dispatcher = EventHandlerDispatcher<Value>.CreateBuilder("value/v1")
             .Register<Replacement>(new ReplacementHandler()).Build();
-        var store = new InMemoryEventStreamStore<Change>();
-        var stream = new EventStream<Value, Change>(StreamTests.StreamId, new Value(10), dispatcher);
+        var store = new InMemoryEventStreamStore();
+        var stream = new EventSourcedAggregate<Value>(StreamTests.StreamId, new Value(10), dispatcher);
         var saved = await stream.HandleAsync(new Replacement(StreamTests.FirstId, 10, 25), store);
         var cancelled = await saved.HandleAsync(new Replacement(StreamTests.SecondId, 25, 10), store);
         var history = await store.ReadAsync(stream.Id);
         Assert.Equal(new Value(10), cancelled.State);
         Assert.Equal(2, cancelled.Version);
         Assert.Equal(new[] { StreamTests.FirstId, StreamTests.SecondId }, history.Select(e => e.Id));
-        Assert.Equal(cancelled.State, EventStream<Value, Change>.Replay(stream.Id,
+        Assert.Equal(cancelled.State, EventSourcedAggregate<Value>.Replay(stream.Id,
             new ReplayDefinition<Value>(new Value(10), "value/v1"), dispatcher, history).State);
     }
 
     [Fact]
     public void Snapshots_derive_rules_from_the_calculation_and_cannot_be_relabelled()
     {
-        var reducer = new EventReducer<Value, Change>("value/v1", (s, e) => s);
-        var stream = new EventStream<Value, Change>(StreamTests.StreamId, new Value(10), reducer);
+        var reducer = new EventReducer<Value>("value/v1", (s, e) => s);
+        var stream = new EventSourcedAggregate<Value>(StreamTests.StreamId, new Value(10), reducer);
         Assert.Equal("value/v1", stream.RuleVersion);
         Assert.Equal("value/v1", stream.CaptureSnapshot(1).RuleVersion);
         Assert.Throws<ReplayRuleVersionException>(() => stream.CaptureSnapshot("value/v2", 1));
-        Assert.Throws<ReplayRuleVersionException>(() => EventStream<Value, Change>.Replay(stream.Id,
+        Assert.Throws<ReplayRuleVersionException>(() => EventSourcedAggregate<Value>.Replay(stream.Id,
             new ReplayDefinition<Value>(new Value(10), "value/v2"), reducer, []));
     }
 
     [Fact]
     public async Task Aggregate_lifecycle_exposes_snapshot_boundary_and_pending_changes()
     {
-        var reducer = new EventReducer<Value, Change>("value/v1", (s, e) => new(s.Amount + 1));
-        var store = new InMemoryEventStreamStore<Change>();
-        var saved = await new EventStream<Value, Change>(StreamTests.StreamId, new Value(10), reducer)
+        var reducer = new EventReducer<Value>("value/v1", (s, e) => new(s.Amount + 1));
+        var store = new InMemoryEventStreamStore();
+        var saved = await new EventSourcedAggregate<Value>(StreamTests.StreamId, new Value(10), reducer)
             .HandleAsync(new GoodChange(StreamTests.FirstId), store);
         var snapshot = saved.CaptureSnapshot(1);
-        var loaded = EventStream<Value, Change>.Replay(snapshot, reducer, await store.ReadFromAsync(saved.Id, 1));
+        var loaded = EventSourcedAggregate<Value>.Replay(snapshot, reducer, await store.ReadFromAsync(saved.Id, 1));
         var root = new Root(loaded.Apply(new GoodChange(StreamTests.SecondId)));
         Assert.Equal(1, root.HistoryStartVersion);
         Assert.Equal(1, root.PersistedVersion);
@@ -122,7 +122,7 @@ public sealed class RefinementTests
         public Value Undo(Value state, Replacement e) => state.Amount == e.Next
             ? new(e.Previous) : throw new InvalidOperationException("Reversal requires the immediate resulting value.");
     }
-    private sealed class Root(EventStream<Value, Change> stream) : EventSourcedAggregate<Value, Change>(stream)
+    private sealed class Root(EventSourcedAggregate<Value> stream) : EventSourcedAggregate<Value>(stream)
     {
         public override IEnumerable<IEntity> Entities => Array.Empty<IEntity>();
     }

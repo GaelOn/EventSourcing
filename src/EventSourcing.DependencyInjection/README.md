@@ -8,11 +8,11 @@ usable without this package, DI abstractions, or a container.
 ## Manual composition remains supported
 
 ```csharp
-var rules = EventHandlerDispatcher<Inventory, InventoryEvent>.CreateBuilder("inventory/v1")
+var rules = EventHandlerDispatcher<Inventory>.CreateBuilder("inventory/v1")
     .Register<Received>(new ReceiptHandler(new ReceiptConfiguration(3)))
     .Register<Renamed>(new RenameHandler())
     .Build();
-var stream = new EventStream<Inventory, InventoryEvent>(id, opening, rules);
+var stream = new EventSourcedAggregate<Inventory>(id, opening, rules);
 ```
 
 The integration fixtures provide these complete example types. `Inventory` owns an immutable
@@ -26,38 +26,37 @@ using EventSourcing.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 
 services.AddSingleton(new ReceiptConfiguration(3));
-services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1", handlers => handlers
+services.AddEventHandlerDispatcher<Inventory>("inventory/v1", handlers => handlers
     .AddHandler<Received, ReceiptHandler>(ServiceLifetime.Scoped)
     .AddHandler<Renamed, RenameHandler>(ServiceLifetime.Scoped),
     dispatcherLifetime: ServiceLifetime.Scoped);
 
-services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v2", handlers => handlers
+services.AddEventHandlerDispatcher<Inventory>("inventory/v2", handlers => handlers
     .AddHandler<Received, DoubleReceiptHandler>()
     .AddHandler<Renamed, RenameHandler>());
 
 using var provider = services.BuildServiceProvider(new ServiceProviderOptions
 { ValidateScopes = true, ValidateOnBuild = true });
 using var scope = provider.CreateScope();
-var rules = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1");
-var stream = new EventStream<Inventory, InventoryEvent>(id, opening, rules);
+var rules = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("inventory/v1");
+var stream = new EventSourcedAggregate<Inventory>(id, opening, rules);
 var saved = await stream.HandleAsync(new Received(eventId, 2), store);
 var snapshot = saved.CaptureSnapshot(schemaVersion: 1);
 ```
 
-The dispatcher is a keyed service with the ordinal rule-version string as its key. The state and
-stream-event types also distinguish registrations. `[FromKeyedServices("inventory/v1")]` can
-inject `EventHandlerDispatcher<Inventory, InventoryEvent>` directly into an application service.
+The dispatcher is a keyed service with the ordinal rule-version string as its key. The state type also distinguishes registrations. `[FromKeyedServices("inventory/v1")]` can
+inject `EventHandlerDispatcher<Inventory>` directly into an application service.
 No unkeyed default dispatcher is registered. An unknown version fails explicitly.
 
 Replay selects rules explicitly:
 
 ```csharp
-var rules = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>(definition.RuleVersion);
-var replayed = EventStream<Inventory, InventoryEvent>.Replay(id, definition, rules, history);
-var restored = EventStream<Inventory, InventoryEvent>.Replay(snapshot, expectedSchemaVersion, rules, suffix);
+var rules = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>(definition.RuleVersion);
+var replayed = EventSourcedAggregate<Inventory>.Replay(id, definition, rules, history);
+var restored = EventSourcedAggregate<Inventory>.Replay(snapshot, expectedSchemaVersion, rules, suffix);
 ```
 
-Registering the same state/stream-event/rule-version dispatcher twice is rejected. A second
+Registering the same state/rule-version dispatcher twice is rejected. A second
 mapping for the same concrete event within one registration is rejected, even if it names the
 same implementation. Failed mapping configuration publishes no adapter service descriptors.
 The startup builder freezes when registration completes; keep one entry point per rule set.
@@ -71,7 +70,7 @@ A business library can contain core-only handlers and expose an optional integra
 ```csharp
 public static IServiceCollection AddFamilyHorizonAccounts(this IServiceCollection services)
 {
-    services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("inventory/v1", handlers => handlers
+    services.AddEventHandlerDispatcher<Inventory>("inventory/v1", handlers => handlers
         .AddHandler<Received, ReceiptHandler>()
         .AddHandler<Renamed, RenameHandler>());
     services.AddSingleton(new ReceiptConfiguration(3));
@@ -87,7 +86,7 @@ Registration is explicit and typed; this release does not scan assemblies or inf
 ## Lifetimes and retained instances
 
 Both dispatcher and handler lifetimes are explicit options and default to scoped. Handlers are
-registered as keyed concrete implementations isolated by state, stream-event and rule-version.
+registered as keyed concrete implementations isolated by state and rule-version.
 The adapter resolves constructor dependencies when constructing the dispatcher. One implementation
 registered for several event interfaces is resolved once per dispatcher construction. Every mapping
 for that implementation must declare the same lifetime.
@@ -106,10 +105,10 @@ are checked when the dispatcher is resolved. Resolve scoped dispatchers inside t
 Container implementations must honor keyed services, scope validation and disposal semantics.
 
 A lifecycle lease guards all registered transitions. Disposing the creating scope invalidates scoped
-and transient dispatchers, including streams retaining their reducer. A singleton dispatcher belongs
+and transient dispatchers, including aggregates retaining their rules. A singleton dispatcher belongs
 to the root provider and survives child-scope disposal; disposing the provider invalidates it.
 Transitions then throw `ObjectDisposedException` before invoking handlers. Do not dispose a scope
-concurrently with a transition or export a scoped stream into a longer-lived application service.
+concurrently with a transition or export a scoped aggregate into a longer-lived application service.
 The container owns and disposes retained disposable handlers; the adapter does not double-dispose them.
 Already computed immutable state remains readable; the guard protects further business transitions.
 

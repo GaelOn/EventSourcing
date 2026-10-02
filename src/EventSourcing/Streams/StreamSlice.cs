@@ -6,7 +6,7 @@ namespace EventSourcing.Streams;
 /// A committed suffix and the earlier identity index from one consistent storage view.
 /// Prefix payloads are omitted; their IDs retain duplicate protection when restoring a snapshot.
 /// </summary>
-public sealed class StreamSlice<TEvent> where TEvent : class, IEvent<TEvent>
+public sealed class StreamSlice
 {
     /// <summary>Identity of the stream participating in this operation.</summary>
     public Guid StreamId { get; }
@@ -15,14 +15,14 @@ public sealed class StreamSlice<TEvent> where TEvent : class, IEvent<TEvent>
     /// <summary>Current stream position, including pending events.</summary>
     public long Version { get; }
     /// <summary>Immutable ordered history retained after the snapshot boundary.</summary>
-    public IReadOnlyList<TEvent> Events { get; }
+    public IReadOnlyList<IEvent> Events { get; }
     /// <summary>Earlier event identities retained for duplicate protection across the snapshot boundary.</summary>
     public IReadOnlyCollection<Guid> PriorEventIds { get; }
     internal ImmutableHashSet<Guid> EventIds { get; }
 
     /// <summary>Validate suffix positions and the complete earlier identity index.</summary>
     public StreamSlice(Guid streamId, long afterVersion, long version,
-        IEnumerable<TEvent> events, IEnumerable<Guid> priorEventIds)
+        IEnumerable<IEvent> events, IEnumerable<Guid> priorEventIds)
     {
         if (streamId == Guid.Empty) throw new ArgumentException("A stream ID is required.", nameof(streamId));
         if (afterVersion < 0) throw new ArgumentOutOfRangeException(nameof(afterVersion));

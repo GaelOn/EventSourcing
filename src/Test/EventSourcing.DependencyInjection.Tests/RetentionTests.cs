@@ -11,17 +11,17 @@ public sealed class RetentionTests
     public void Forward_and_reverse_use_retained_instances_without_any_further_container_queries()
     {
         var services = new ServiceCollection().AddFamilyHorizonAccounts();
-        var descriptor = services.Single(d => d.ServiceType == typeof(EventHandlerDispatcher<Inventory, InventoryEvent>));
+        var descriptor = services.Single(d => d.ServiceType == typeof(EventHandlerDispatcher<Inventory>));
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
         using var scope = provider.CreateScope();
         var observed = new ObservedProvider(scope.ServiceProvider);
         // Invoke the registered dispatcher factory with an observed real-container scope.
-        var dispatcher = (EventHandlerDispatcher<Inventory, InventoryEvent>)descriptor.KeyedImplementationFactory!(observed, "inventory/v1");
+        var dispatcher = (EventHandlerDispatcher<Inventory>)descriptor.KeyedImplementationFactory!(observed, "inventory/v1");
         var queriesAtConstruction = observed.Queries;
         Assert.True(queriesAtConstruction > 0);
         var registrationsAtConstruction = services.Count;
         var opening = new Inventory(new("Original", 10));
-        InventoryEvent[] events = [new Received(Guid.NewGuid(), 2), new Renamed(Guid.NewGuid(), "Original", "Next")];
+        IEvent[] events = [new Received(Guid.NewGuid(), 2), new Renamed(Guid.NewGuid(), "Original", "Next")];
         foreach (var e in events) Assert.Equal(opening, dispatcher.Undo(dispatcher.Do(opening, e), e));
         Assert.Equal(queriesAtConstruction, observed.Queries);
         Assert.Equal(registrationsAtConstruction, services.Count);
@@ -33,12 +33,12 @@ public sealed class RetentionTests
     {
         var probe = new DisposalProbe();
         var services = new ServiceCollection(); services.AddSingleton(probe);
-        services.AddEventHandlerDispatcher<Inventory, InventoryEvent>("disposal/v1", h => h
+        services.AddEventHandlerDispatcher<Inventory>("disposal/v1", h => h
             .AddHandler<Received, DisposableHandler>(ServiceLifetime.Transient)
             .AddHandler<Renamed, DisposableHandler>(ServiceLifetime.Transient));
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
         var scope = provider.CreateScope();
-        var dispatcher = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory, InventoryEvent>("disposal/v1");
+        var dispatcher = scope.ServiceProvider.GetEventHandlerDispatcher<Inventory>("disposal/v1");
         Assert.Equal(1, probe.Constructed); Assert.Equal(0, probe.Disposed);
         scope.Dispose();
         Assert.Equal(1, probe.Disposed);

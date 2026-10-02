@@ -34,3 +34,7 @@ allocations, not retained memory, disk I/O or network costs. No timing threshold
 
 See the [methodology](../README.md) and BenchmarkDotNet's
 [memory diagnostics documentation](https://benchmarkdotnet.org/articles/configs/diagnosers.html).
+
+## Aggregate and stream refactor baseline
+
+The [2 October 2026 methodology](2026-10-02-methodology.md) links the final 34-operation report, two batch measurements, CSV data and source hashes. It documents reproducible inputs and the limits of comparing shared-host timings.

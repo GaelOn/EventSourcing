@@ -55,7 +55,7 @@ public class EventTransactionManager : IEventTransactionManager
     {
         ArgumentNullException.ThrowIfNull(@event);
         ArgumentNullException.ThrowIfNull(aggregate);
-        return Streams.EventHistory.AssignMetadata(@event, aggregate.Id, checked(aggregate.Version + 1));
+        return (TEvent)Streams.EventHistory.AssignMetadata(@event, aggregate.Id, checked(aggregate.Version + 1));
     }
 }
 

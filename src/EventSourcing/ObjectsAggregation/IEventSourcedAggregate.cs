@@ -2,23 +2,28 @@ using EventSourcing.Streams;
 
 namespace EventSourcing.ObjectsAggregation;
 
-/// <summary>Business aggregate backed by a single immutable event stream.</summary>
-public interface IEventSourcedAggregate<TState, TEvent> : IAggregate
-    where TState : class
-    where TEvent : class, IEvent<TEvent>
+/// <summary>Business-root lifecycle independent of state and event types.</summary>
+public interface IEventSourcedAggregate : IAggregate
 {
-    /// <summary>Complete immutable business state at the current version.</summary>
-    TState State { get; }
-    /// <summary>Immutable stream view; applying an event returns a separate branch and does not modify this root.</summary>
-    EventStream<TState, TEvent> Stream { get; }
-    /// <summary>Committed stream position.</summary>
+    /// <summary>History matching this root's business state.</summary>
+    EventStream Stream { get; }
+    /// <summary>Last committed position.</summary>
     long PersistedVersion { get; }
-    /// <summary>Snapshot boundary preceding retained history.</summary>
+    /// <summary>Checkpoint preceding retained events.</summary>
     long HistoryStartVersion { get; }
-    /// <summary>Calculation rule identity, if bound.</summary>
-    string? RuleVersion { get; }
-    /// <summary>Accepted changes awaiting persistence.</summary>
-    IReadOnlyList<TEvent> PendingEvents { get; }
-    /// <summary>Whether pending events exist.</summary>
+    /// <summary>Bound transition implementation and immutable configuration identity.</summary>
+    string RuleVersion { get; }
+    /// <summary>Accepted events awaiting persistence.</summary>
+    IReadOnlyList<IEvent> PendingEvents { get; }
+    /// <summary>Retained ordered history.</summary>
+    IReadOnlyList<IEvent> Events { get; }
+    /// <summary>Whether accepted events remain uncommitted.</summary>
     bool HasPendingChanges { get; }
+}
+
+/// <summary>A business aggregate with one authoritative immutable state.</summary>
+public interface IEventSourcedAggregate<TState> : IEventSourcedAggregate where TState : class
+{
+    /// <summary>Complete root and entity state corresponding to Stream.</summary>
+    TState State { get; }
 }

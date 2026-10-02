@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using EventSourcing.Streams;
 using EventSourcing.Transaction;
 
@@ -16,8 +17,8 @@ public sealed class StreamPersistenceTests : IDisposable
         var saved = await opening.Apply(new LedgerEvent(StreamTests.FirstId, 25m))
             .Apply(new LedgerEvent(StreamTests.SecondId, -10m)).SaveAsync(Store());
         var history = await Store().ReadAsync(StreamTests.StreamId);
-        var replayed = EventStream<Balance, LedgerEvent>.Replay(StreamTests.StreamId,
-            new Balance(100m), StreamTests.Reduce, history);
+        var replayed = EventSourcedAggregate<Balance>.Replay(StreamTests.StreamId,
+            new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1", StreamTests.Reduce, history);
 
         Assert.Equal(115m, replayed.State.Amount);
         Assert.Equal(saved.State, replayed.State);

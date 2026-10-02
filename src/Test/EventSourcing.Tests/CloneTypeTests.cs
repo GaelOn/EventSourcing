@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using EventSourcing.Streams;
 
 namespace EventSourcing.Tests;
@@ -8,7 +9,7 @@ public sealed class CloneTypeTests
     public void Type_changing_clone_is_rejected_before_reduction_and_preserves_pending_branch()
     {
         var calls = 0;
-        var stream = new EventStream<State, TestEvent>(Guid.NewGuid(), new(0), (s, _) => { calls++; return new(s.Value + 1); })
+        var stream = new EventSourcedAggregate<State>(Guid.NewGuid(), new(0), "test/v1", (s, _) => { calls++; return new(s.Value + 1); })
             .Apply(new Good(Guid.NewGuid()));
         var pending = stream.PendingEvents.ToArray();
         Assert.Throws<EventCloneException>(() => stream.Apply(new Bad(Guid.NewGuid())));

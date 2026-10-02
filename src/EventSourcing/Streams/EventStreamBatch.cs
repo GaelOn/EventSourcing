@@ -1,14 +1,11 @@
 namespace EventSourcing.Streams;
 
-/// <summary>Save related immutable streams through one atomic storage operation.</summary>
+/// <summary>State-free atomic persistence, including unchanged participants as read dependencies.</summary>
 public static class EventStreamBatch
 {
-    /// <summary>Commit pending events atomically; return a saved view without changing the original on success or failure.</summary>
-    public static async Task<IReadOnlyList<EventStream<TState, TEvent>>> SaveAsync<TState, TEvent>(
-        IAtomicEventStreamStore<TEvent> store, IEnumerable<EventStream<TState, TEvent>> streams,
-        CancellationToken cancellationToken = default)
-        where TState : class
-        where TEvent : class, IEvent<TEvent>
+    /// <summary>Prepare all saved views, then commit every expected version and append in one transaction.</summary>
+    public static async Task<IReadOnlyList<EventStream>> SaveAsync(IAtomicEventStreamStore store,
+        IEnumerable<EventStream> streams, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(streams);
@@ -20,12 +17,9 @@ public static class EventStreamBatch
             ArgumentNullException.ThrowIfNull(stream);
             if (!ids.Add(stream.Id)) throw new ArgumentException("Each stream can participate only once.", nameof(streams));
         }
-        // Build return values before persistence so no user code executes after the commit.
-        var saved = Array.AsReadOnly(participants.Select(stream => stream.AsSaved()).ToArray());
-        var appends = Array.AsReadOnly(participants.Select(stream =>
-            new StreamAppend<TEvent>(stream.Id, stream.PersistedVersion, stream.PendingEvents)).ToArray());
-        if (appends.Count > 0)
-            await store.AppendBatchAsync(appends, cancellationToken);
+        var saved = Array.AsReadOnly(participants.Select(s => s.AsSaved()).ToArray());
+        var appends = Array.AsReadOnly(participants.Select(s => new StreamAppend(s.Id, s.PersistedVersion, s.PendingEvents)).ToArray());
+        if (appends.Count > 0) await store.AppendBatchAsync(appends, cancellationToken).ConfigureAwait(false);
         return saved;
     }
 }

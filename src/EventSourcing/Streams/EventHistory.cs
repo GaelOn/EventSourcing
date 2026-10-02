@@ -4,8 +4,7 @@ namespace EventSourcing.Streams;
 public static class EventHistory
 {
     /// <summary>Validate stream order, metadata and unique nonempty event identities before replay.</summary>
-    public static void Validate<TEvent>(Guid streamId, IEnumerable<TEvent> events)
-        where TEvent : class, IEvent<TEvent>
+    public static void Validate(Guid streamId, IEnumerable<IEvent> events)
     {
         if (streamId == Guid.Empty) throw new ArgumentException("A stream ID is required.", nameof(streamId));
         ArgumentNullException.ThrowIfNull(events);
@@ -20,16 +19,14 @@ public static class EventHistory
         }
     }
 
-    internal static void ValidatePosition<TEvent>(Guid streamId, TEvent @event, long version)
-        where TEvent : class, IEvent<TEvent>
+    internal static void ValidatePosition(Guid streamId, IEvent @event, long version)
     {
         if (@event.Metadata != new EventMetadata(version, streamId))
             throw new InvalidOperationException("Event stream identity or version is inconsistent.");
     }
 
     /// <summary>Clone an unrecorded event with its stream position, preserving caller identity.</summary>
-    public static TEvent AssignMetadata<TEvent>(TEvent @event, Guid streamId, long version)
-        where TEvent : class, IEvent<TEvent>
+    public static IEvent AssignMetadata(IEvent @event, Guid streamId, long version)
     {
         ArgumentNullException.ThrowIfNull(@event);
         if (streamId == Guid.Empty) throw new ArgumentException("A stream ID is required.", nameof(streamId));

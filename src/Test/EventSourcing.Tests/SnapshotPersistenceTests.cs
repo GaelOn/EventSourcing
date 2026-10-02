@@ -1,3 +1,4 @@
+using EventSourcing.ObjectsAggregation;
 using EventSourcing.Snapshots;
 using EventSourcing.Streams;
 
@@ -8,9 +9,9 @@ public sealed class SnapshotPersistenceTests : IDisposable
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "snapshot-persistence-" + Guid.NewGuid());
     private string LedgerPath => Path.Combine(_directory, "ledger.json");
     private string SnapshotPath => Path.Combine(_directory, "snapshots.json");
-    private (IAtomicEventStreamStore<LedgerEvent> Events, ISnapshotStore<Balance> Snapshots) Stores(bool file) =>
+    private (IAtomicEventStreamStore Events, ISnapshotStore<Balance> Snapshots) Stores(bool file) =>
         file ? (new JsonLedgerStore(LedgerPath), new JsonSnapshotStore<Balance>(SnapshotPath))
-            : (new InMemoryEventStreamStore<LedgerEvent>(), new InMemorySnapshotStore<Balance>());
+            : (new InMemoryEventStreamStore(), new InMemorySnapshotStore<Balance>());
 
     [Theory]
     [InlineData(false)]
@@ -23,7 +24,7 @@ public sealed class SnapshotPersistenceTests : IDisposable
         await saved.HandleAsync(new LedgerEvent(StreamTests.SecondId, -10m), events);
         var calls = 0;
 
-        var loaded = await EventStream<Balance, LedgerEvent>.LoadAsync(saved.Id,
+        var loaded = await EventSourcedAggregate<Balance>.LoadAsync(saved.Id,
             new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1", 1,
             (state, e) => { calls++; return StreamTests.Reduce(state, e); }, events, snapshots);
 
@@ -46,10 +47,10 @@ public sealed class SnapshotPersistenceTests : IDisposable
         var (events, snapshots) = Stores(file);
         var saved = await StreamTests.Create().HandleAsync(new LedgerEvent(StreamTests.FirstId, 25m), events);
         if (incompatible != 0)
-            await snapshots.SaveAsync(saved.CaptureSnapshot(incompatible == 1 ? "balance/v0" : "balance/v1",
-                incompatible == 2 ? 2 : 1));
+            await snapshots.SaveAsync(new AggregateSnapshot<Balance>(saved.Id, saved.PersistedVersion, saved.State,
+                incompatible == 1 ? "balance/v0" : "balance/v1", incompatible == 2 ? 2 : 1));
 
-        var loaded = await EventStream<Balance, LedgerEvent>.LoadAsync(saved.Id,
+        var loaded = await EventSourcedAggregate<Balance>.LoadAsync(saved.Id,
             new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1", 1,
             StreamTests.Reduce, events, snapshots);
 
@@ -68,7 +69,7 @@ public sealed class SnapshotPersistenceTests : IDisposable
         await snapshots.SaveAsync(new AggregateSnapshot<Balance>(StreamTests.StreamId, 10, new Balance(999m), "balance/v1", 1));
         var calls = 0;
 
-        await Assert.ThrowsAsync<StreamConcurrencyException>(() => EventStream<Balance, LedgerEvent>.LoadAsync(
+        await Assert.ThrowsAsync<StreamConcurrencyException>(() => EventSourcedAggregate<Balance>.LoadAsync(
             StreamTests.StreamId, new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1", 1,
             (state, e) => { calls++; return StreamTests.Reduce(state, e); }, events, snapshots));
 
@@ -161,12 +162,12 @@ public sealed class SnapshotPersistenceTests : IDisposable
         var before = await File.ReadAllBytesAsync(LedgerPath);
         await File.WriteAllTextAsync(SnapshotPath, "corrupt checkpoint");
 
-        await Assert.ThrowsAsync<System.Text.Json.JsonException>(() => EventStream<Balance, LedgerEvent>.LoadAsync(saved.Id,
+        await Assert.ThrowsAsync<System.Text.Json.JsonException>(() => EventSourcedAggregate<Balance>.LoadAsync(saved.Id,
             new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1", 1,
             StreamTests.Reduce, events, snapshots));
 
         Assert.Equal(before, await File.ReadAllBytesAsync(LedgerPath));
-        Assert.Equal(125m, EventStream<Balance, LedgerEvent>.Replay(saved.Id, new Balance(100m),
+        Assert.Equal(125m, EventSourcedAggregate<Balance>.Replay(saved.Id, new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1",
             StreamTests.Reduce, await events.ReadAsync(saved.Id)).State.Amount);
     }
 
@@ -178,7 +179,7 @@ public sealed class SnapshotPersistenceTests : IDisposable
         await new JsonSnapshotStore<string>(SnapshotPath).SaveAsync(
             new AggregateSnapshot<string>(saved.Id, 1, "an older state representation", "balance/v1", 2));
 
-        var loaded = await EventStream<Balance, LedgerEvent>.LoadAsync(saved.Id,
+        var loaded = await EventSourcedAggregate<Balance>.LoadAsync(saved.Id,
             new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1", 1,
             StreamTests.Reduce, events, snapshots);
 
@@ -195,23 +196,23 @@ public sealed class SnapshotPersistenceTests : IDisposable
         var (events, snapshots) = Stores(file);
         var id = Guid.NewGuid();
         var source = StreamTests.Create().Apply(new LedgerEvent(id, -25m));
-        var destination = new EventStream<Balance, LedgerEvent>(StreamTests.SecondId, new Balance(0m), StreamTests.Reduce)
+        var destination = new EventSourcedAggregate<Balance>(StreamTests.SecondId, new Balance(0m), "balance/v1", StreamTests.Reduce)
             .Apply(new LedgerEvent(id, 25m));
-        var first = await EventStreamBatch.SaveAsync(events, new[] { source, destination });
+        var first = await EventSourcedAggregateBatch.SaveAsync(events, new[] { source, destination });
         var sourceSnapshot = first[0].CaptureSnapshot("balance/v1", 1);
         var destinationSnapshot = first[1].CaptureSnapshot("balance/v1", 1);
         await snapshots.SaveAsync(sourceSnapshot);
         await snapshots.SaveAsync(destinationSnapshot);
         var later = Guid.NewGuid();
-        await EventStreamBatch.SaveAsync(events, new[] {
+        await EventSourcedAggregateBatch.SaveAsync(events, new[] {
             first[0].Apply(new LedgerEvent(later, -10m)), first[1].Apply(new LedgerEvent(later, 10m)) });
 
         var suffixes = await events.ReadBatchFromAsync(new[] {
             new StreamReadRequest(source.Id, sourceSnapshot.StreamVersion),
             new StreamReadRequest(destination.Id, destinationSnapshot.StreamVersion) });
-        var restoredSource = EventStream<Balance, LedgerEvent>.Replay(sourceSnapshot, "balance/v1", 1,
+        var restoredSource = EventSourcedAggregate<Balance>.Replay(sourceSnapshot, "balance/v1", 1,
             StreamTests.Reduce, suffixes[source.Id]);
-        var restoredDestination = EventStream<Balance, LedgerEvent>.Replay(destinationSnapshot, "balance/v1", 1,
+        var restoredDestination = EventSourcedAggregate<Balance>.Replay(destinationSnapshot, "balance/v1", 1,
             StreamTests.Reduce, suffixes[destination.Id]);
 
         Assert.Equal(65m, restoredSource.State.Amount);
@@ -226,7 +227,7 @@ public sealed class SnapshotPersistenceTests : IDisposable
         var pending = new[] {
             restoredSource.Apply(new LedgerEvent(nextTransfer, -5m)),
             restoredDestination.Apply(new LedgerEvent(nextTransfer, 5m)) };
-        var persisted = await EventStreamBatch.SaveAsync(events, pending);
+        var persisted = await EventSourcedAggregateBatch.SaveAsync(events, pending);
 
         Assert.Equal(100m, persisted.Sum(s => s.State.Amount));
         Assert.All(persisted, s => Assert.Equal(3, s.PersistedVersion));
@@ -247,7 +248,7 @@ public sealed class SnapshotPersistenceTests : IDisposable
         cancellation.Cancel();
         var calls = 0;
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => EventStream<Balance, LedgerEvent>.LoadAsync(saved.Id,
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => EventSourcedAggregate<Balance>.LoadAsync(saved.Id,
             new ReplayDefinition<Balance>(new Balance(100m), "balance/v1"), "balance/v1", 1,
             (state, e) => { calls++; return StreamTests.Reduce(state, e); }, events, snapshots, cancellation.Token));
 

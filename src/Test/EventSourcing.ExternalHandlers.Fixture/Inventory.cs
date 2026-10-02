@@ -5,22 +5,20 @@ namespace EventSourcing.ExternalHandlers.Fixture;
 public sealed record Item(string Name, int Quantity);
 public sealed record Inventory(Item OwnedItem);
 public sealed record ReceiptConfiguration(int Multiplier);
-public abstract class InventoryEvent(Guid id, EventMetadata? metadata = null)
-    : EventBase<InventoryEvent>(id, metadata ?? new(null, null));
-public sealed class Received(Guid id, int quantity, EventMetadata? metadata = null) : InventoryEvent(id, metadata)
+public sealed class Received(Guid id, int quantity, EventMetadata? metadata = null) : EventBase(id, metadata ?? new(null, null))
 {
     public int Quantity { get; } = quantity;
-    public override InventoryEvent Clone(EventMetadata metadata) => new Received(Id, Quantity, metadata);
+    public override IEvent Clone(EventMetadata metadata) => new Received(Id, Quantity, metadata);
 }
-public sealed class Renamed(Guid id, string previous, string next, EventMetadata? metadata = null) : InventoryEvent(id, metadata)
+public sealed class Renamed(Guid id, string previous, string next, EventMetadata? metadata = null) : EventBase(id, metadata ?? new(null, null))
 {
     public string Previous { get; } = previous;
     public string Next { get; } = next;
-    public override InventoryEvent Clone(EventMetadata metadata) => new Renamed(Id, Previous, Next, metadata);
+    public override IEvent Clone(EventMetadata metadata) => new Renamed(Id, Previous, Next, metadata);
 }
-public sealed class Unregistered(Guid id, EventMetadata? metadata = null) : InventoryEvent(id, metadata)
+public sealed class Unregistered(Guid id, EventMetadata? metadata = null) : EventBase(id, metadata ?? new(null, null))
 {
-    public override InventoryEvent Clone(EventMetadata metadata) => new Unregistered(Id, metadata);
+    public override IEvent Clone(EventMetadata metadata) => new Unregistered(Id, metadata);
 }
 public sealed class ReceiptHandler(ReceiptConfiguration configuration) : IEventHandler<Inventory, Received>
 {

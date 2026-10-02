@@ -1,6 +1,6 @@
 # EventSourcing.Compatibility
 
-Optional .NET 10 package containing the obsolete synchronous `CallbackEventSourcedAggregate` and its reversible transaction coordinator. New business roots should reference `EventSourcing` and compose an `EventStream<TState, TEvent>` through the supported core `EventSourcedAggregate`. The business aggregate concept is not obsolete.
+Optional .NET 10 package containing the obsolete synchronous `CallbackEventSourcedAggregate` and its reversible transaction coordinator. New business roots should reference `EventSourcing` and derive from the state-owning `EventSourcedAggregate<TState>` with a state-free `EventStream`. The business aggregate concept is not obsolete.
 
 This package depends on the matching `EventSourcing` core package. The core has no dependency on compatibility code. Existing `EventSourcing.ObjectsAggregation` and `EventSourcing.Transaction` namespaces are retained; add an explicit package reference when migrating callback consumers to `0.1.0-alpha.3`.
 
