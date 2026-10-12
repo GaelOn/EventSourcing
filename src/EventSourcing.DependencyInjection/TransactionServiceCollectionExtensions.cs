@@ -15,6 +15,7 @@ public static class TransactionServiceCollectionExtensions
             throw new ArgumentException("A transaction coordinator is already registered.", nameof(services));
         services.AddSingleton<IEventTransactionCoordinator>(provider => new LocalEventTransactionCoordinator(
             provider.GetRequiredService<ITransactionSessionStore>(), journalStreamId));
+        services.AddSingleton<OperationProcessor>();
         return services;
     }
 }

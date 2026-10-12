@@ -1,17 +1,24 @@
 using EventSourcing.Streams;
+using EventSourcing.Storage.Json;
 using EventSourcing.Transactions;
 
 namespace EventSourcing.Tests;
 
-public sealed class OperationAdmissionTests
+public sealed class OperationAdmissionTests : IDisposable
 {
-    private readonly InMemoryEventStreamStore _store = new();
+    private ITransactionSessionStore _store = new InMemoryEventStreamStore();
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "operation-admission-" + Guid.NewGuid());
+    private void UseStore(bool durable)
+    { if (durable) _store = new JsonEventStreamStore(Path.Combine(_directory, "events.json"), new JsonEventCodec().Register<LedgerEvent>("ledger/v1")); }
     private readonly Guid _journal = Guid.NewGuid();
     private LocalEventTransactionCoordinator Coordinator() => new(_store, _journal);
 
-    [Fact]
-    public async Task Concurrent_duplicate_waits_for_commit_and_never_runs_second_consequences()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Concurrent_duplicate_waits_for_commit_and_never_runs_second_consequences(bool durable)
     {
+        UseStore(durable);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var key = new OperationKey("synthetic/v1", "noop"); var calls = 0;
@@ -28,9 +35,12 @@ public sealed class OperationAdmissionTests
         Assert.Equal(1, calls); Assert.Equal(2, (await _store.ReadAsync(_journal)).Count);
     }
 
-    [Fact]
-    public async Task Waiter_acquires_only_after_failed_isolated_attempt_rolls_back()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Waiter_acquires_only_after_failed_isolated_attempt_rolls_back(bool durable)
     {
+        UseStore(durable);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var key = new OperationKey("synthetic/v1", "retry"); var streamId = Guid.NewGuid();
@@ -54,9 +64,12 @@ public sealed class OperationAdmissionTests
             (await _store.ReadAsync(_journal)).Cast<OperationJournalEvent>().Select(e => e.Kind));
     }
 
-    [Fact]
-    public async Task Noop_is_consumed_namespaces_are_independent_and_contract_conflicts_fail()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Noop_is_consumed_namespaces_are_independent_and_contract_conflicts_fail(bool durable)
     {
+        UseStore(durable);
         var processor = new OperationProcessor(Coordinator());
         foreach (var scope in new[] { "tenant-a/v1", "tenant-b/v1" })
             Assert.Equal(OperationStatus.Committed, (await processor.ExecuteAsync(new(scope, "same"), "rules/v1",
@@ -66,9 +79,12 @@ public sealed class OperationAdmissionTests
         await Assert.ThrowsAsync<OperationIntegrityException>(() => Coordinator().BeginAsync(new("tenant-a/v1", "same"), "rules/v2"));
     }
 
-    [Fact]
-    public async Task Selected_replay_prefix_never_consults_later_receipts_or_mutates_store()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Selected_replay_prefix_never_consults_later_receipts_or_mutates_store(bool durable)
     {
+        UseStore(durable);
         var coordinator = Coordinator(); var key = new OperationKey("synthetic/v1", "future");
         var before = await _store.ReadBatchAsync(new[] { _journal });
         await new OperationProcessor(coordinator).ExecuteAsync(key, "v1", _ => Task.FromResult(new OperationPlan(Array.Empty<StreamAppend>())));
@@ -79,9 +95,12 @@ public sealed class OperationAdmissionTests
         Assert.Equal(2, (await _store.ReadAsync(_journal)).Count);
     }
 
-    [Fact]
-    public async Task Timeout_and_cancellation_never_grant_a_second_claim()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Timeout_and_cancellation_never_grant_a_second_claim(bool durable)
     {
+        UseStore(durable);
         var coordinator = Coordinator(); var key = new OperationKey("test/v1", "pending");
         var handle = (await coordinator.BeginAsync(key, "v1")).Handle!;
         Assert.Equal(OperationStatus.InProgress, (await coordinator.ResolveAsync(key, "v1", TimeSpan.Zero)).Status);
@@ -90,6 +109,12 @@ public sealed class OperationAdmissionTests
         Assert.Equal(OperationStatus.InProgress, (await coordinator.BeginAsync(key, "v1")).Status);
         await coordinator.RollbackAsync(handle);
         await Assert.ThrowsAsync<OperationIntegrityException>(() => coordinator.CommitAsync(handle));
+    }
+
+    public void Dispose()
+    {
+        (_store as IDisposable)?.Dispose();
+        if (Directory.Exists(_directory)) Directory.Delete(_directory, true);
     }
 
     [Fact]

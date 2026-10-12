@@ -39,7 +39,37 @@ public enum OperationStatus
 
 /// <summary>Immutable result; consumed outcomes are retained even for decisions with no domain events.</summary>
 public sealed record OperationResult(OperationStatus Status, TransactionHandle? Handle = null,
-    OperationJournalEvent? Receipt = null);
+    OperationReceipt? Receipt = null);
+
+/// <summary>Coordinator-independent consumed outcome. Contains no local journal lifecycle or storage internals.</summary>
+public sealed class OperationReceipt
+{
+    /// <summary>Consumed semantic identity.</summary>
+    public OperationKey Key { get; }
+    /// <summary>Immutable processing contract.</summary>
+    public string ContractVersion { get; }
+    /// <summary>Original committing attempt.</summary>
+    public Guid AttemptId { get; }
+    /// <summary>Complete ordered event range evidence.</summary>
+    public IReadOnlyList<OperationRange> Ranges { get; }
+    /// <summary>Retained client-defined result.</summary>
+    public string? Outcome { get; }
+    /// <summary>Create a validated immutable result for an injectable coordinator.</summary>
+    public OperationReceipt(OperationKey key, string contractVersion, Guid attemptId,
+        IEnumerable<OperationRange> ranges, string? outcome = null)
+    {
+        ArgumentNullException.ThrowIfNull(key); ArgumentNullException.ThrowIfNull(ranges);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contractVersion);
+        if (attemptId == Guid.Empty) throw new ArgumentException("Committing attempt is required.", nameof(attemptId));
+        var copy = ranges.ToArray();
+        if (copy.Any(r => r is null) || copy.Select(r => r.StreamId).Distinct().Count() != copy.Length)
+            throw new OperationIntegrityException("Invalid consumed outcome ranges.");
+        Key = key; ContractVersion = contractVersion; AttemptId = attemptId;
+        Ranges = Array.AsReadOnly(copy); Outcome = outcome;
+    }
+    internal static OperationReceipt FromJournal(OperationJournalEvent e) =>
+        new(e.Key, e.ContractVersion, e.AttemptId, e.Ranges, e.Outcome);
+}
 
 /// <summary>Exclusive process/session identity of a store. Reopening durable storage obtains a new session.</summary>
 public interface ITransactionSessionStore : IAtomicEventStreamStore
@@ -76,8 +106,14 @@ public sealed class TransactionHandle
     public string ContractVersion { get; }
     /// <summary>Attempt identity, distinct from operation and domain event identities.</summary>
     public Guid AttemptId { get; }
-    internal TransactionHandle(object coordinator, OperationKey key, string contractVersion, Guid attemptId)
-    { Coordinator = coordinator; Key = key; ContractVersion = contractVersion; AttemptId = attemptId; }
+    /// <summary>Coordinator implementations create and validate their own attempt capabilities.</summary>
+    public TransactionHandle(object coordinator, OperationKey key, string contractVersion, Guid attemptId)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator); ArgumentNullException.ThrowIfNull(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(contractVersion);
+        if (attemptId == Guid.Empty) throw new ArgumentException("An attempt identity is required.", nameof(attemptId));
+        Coordinator = coordinator; Key = key; ContractVersion = contractVersion; AttemptId = attemptId;
+    }
 }
 
 /// <summary>Injectable local transaction guarantees; applications do not depend on journal internals.</summary>

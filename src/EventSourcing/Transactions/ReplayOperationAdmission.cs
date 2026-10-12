@@ -27,7 +27,7 @@ public sealed class ReplayOperationAdmission
         ArgumentNullException.ThrowIfNull(key); ArgumentException.ThrowIfNullOrWhiteSpace(contractVersion);
         if (!_receipts.TryGetValue(key, out var receipt)) return new(OperationStatus.ReplaySuppressed);
         if (receipt.ContractVersion != contractVersion) throw new OperationIntegrityException("Replay proposal conflicts with retained identity metadata.");
-        return new(OperationStatus.AlreadyConsumed, Receipt: receipt);
+        return new(OperationStatus.AlreadyConsumed, Receipt: OperationReceipt.FromJournal(receipt));
     }
 }
 

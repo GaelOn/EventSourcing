@@ -16,6 +16,8 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <ProjectReference Include="../../EventSourcing/EventSourcing.csproj" />
+    <ProjectReference Include="../../EventSourcing.Storage.Json/EventSourcing.Storage.Json.csproj" />
+    <ProjectReference Include="../EventSourcing.TransactionCrashHost/EventSourcing.TransactionCrashHost.csproj" />
     <ProjectReference Include="../EventSourcing.ExternalHandlers.Fixture/EventSourcing.ExternalHandlers.Fixture.csproj" />
     <ProjectReference Include="../../EventSourcing.Compatibility/EventSourcing.Compatibility.csproj" />
   </ItemGroup>

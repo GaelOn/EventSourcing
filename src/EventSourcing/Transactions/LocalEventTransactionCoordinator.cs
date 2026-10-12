@@ -28,10 +28,17 @@ public sealed class LocalEventTransactionCoordinator : IEventTransactionCoordina
         {
             var (journal, states) = await ReadAsync(cancellationToken).ConfigureAwait(false);
             var current = Find(states, key, contractVersion);
-            if (current?.Kind == OperationJournalKind.Committed) return new(OperationStatus.AlreadyConsumed, Receipt: current);
+            if (current?.Kind == OperationJournalKind.Committed) return new(OperationStatus.AlreadyConsumed, Receipt: OperationReceipt.FromJournal(current));
             if (current?.Kind == OperationJournalKind.Claimed) return new(OperationStatus.InProgress);
             var handle = new TransactionHandle(this, key, contractVersion, Guid.NewGuid());
-            await AppendMarkerAsync(journal, Marker(handle, OperationJournalKind.Claimed), cancellationToken).ConfigureAwait(false);
+            try { await AppendMarkerAsync(journal, Marker(handle, OperationJournalKind.Claimed), cancellationToken).ConfigureAwait(false); }
+            catch
+            {
+                var (_, confirmed) = await ReadAsync(CancellationToken.None).ConfigureAwait(false);
+                var claimed = Find(confirmed, key, contractVersion);
+                if (claimed?.Kind != OperationJournalKind.Claimed || claimed.AttemptId != handle.AttemptId
+                    || claimed.OwnerSessionId != _store.SessionId) throw;
+            }
             return new(OperationStatus.Claimed, handle);
         }
         finally { _gate.Release(); }
@@ -64,7 +71,7 @@ public sealed class LocalEventTransactionCoordinator : IEventTransactionCoordina
             var (journal, states) = await ReadAsync(cancellationToken).ConfigureAwait(false);
             var current = Find(states, handle.Key, handle.ContractVersion);
             if (current?.Kind == OperationJournalKind.Committed && current.AttemptId == handle.AttemptId)
-                return new(OperationStatus.AlreadyConsumed, Receipt: current);
+                return new(OperationStatus.AlreadyConsumed, Receipt: OperationReceipt.FromJournal(current));
             RequireOwner(handle, current);
             var plan = handle.Plan ?? throw new OperationIntegrityException("Attempt has no staged plan.");
             var receipt = Marker(handle, OperationJournalKind.Committed, plan);
@@ -77,10 +84,10 @@ public sealed class LocalEventTransactionCoordinator : IEventTransactionCoordina
                 var (_, confirmed) = await ReadAsync(CancellationToken.None).ConfigureAwait(false);
                 var recorded = Find(confirmed, handle.Key, handle.ContractVersion);
                 if (recorded?.Kind == OperationJournalKind.Committed && recorded.AttemptId == handle.AttemptId)
-                    return new(OperationStatus.Committed, Receipt: recorded);
+                    return new(OperationStatus.Committed, Receipt: OperationReceipt.FromJournal(recorded));
                 throw;
             }
-            return new(OperationStatus.Committed, Receipt: tagged);
+            return new(OperationStatus.Committed, Receipt: OperationReceipt.FromJournal(tagged));
         }
         finally { _gate.Release(); }
     }
@@ -96,7 +103,13 @@ public sealed class LocalEventTransactionCoordinator : IEventTransactionCoordina
             var current = Find(states, handle.Key, handle.ContractVersion);
             if (current?.AttemptId == handle.AttemptId && current.Kind is OperationJournalKind.Committed or OperationJournalKind.RolledBack) return;
             RequireOwner(handle, current);
-            await AppendMarkerAsync(journal, Marker(handle, OperationJournalKind.RolledBack), cancellationToken).ConfigureAwait(false);
+            try { await AppendMarkerAsync(journal, Marker(handle, OperationJournalKind.RolledBack), cancellationToken).ConfigureAwait(false); }
+            catch
+            {
+                var (_, confirmed) = await ReadAsync(CancellationToken.None).ConfigureAwait(false);
+                var rolledBack = Find(confirmed, handle.Key, handle.ContractVersion);
+                if (rolledBack?.Kind != OperationJournalKind.RolledBack || rolledBack.AttemptId != handle.AttemptId) throw;
+            }
             handle.Plan = null;
         }
         finally { _gate.Release(); }
@@ -113,7 +126,7 @@ public sealed class LocalEventTransactionCoordinator : IEventTransactionCoordina
         {
             var (_, states) = await ReadAsync(cancellationToken).ConfigureAwait(false);
             var current = Find(states, key, contractVersion);
-            if (current?.Kind == OperationJournalKind.Committed) return new(OperationStatus.AlreadyConsumed, Receipt: current);
+            if (current?.Kind == OperationJournalKind.Committed) return new(OperationStatus.AlreadyConsumed, Receipt: OperationReceipt.FromJournal(current));
             if (current is null || current.Kind == OperationJournalKind.RolledBack) return new(OperationStatus.RetryAllowed);
             var remaining = wait - clock.Elapsed;
             if (remaining <= TimeSpan.Zero) return new(OperationStatus.InProgress);

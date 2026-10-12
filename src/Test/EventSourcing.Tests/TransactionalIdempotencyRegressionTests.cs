@@ -1,11 +1,15 @@
 using EventSourcing.Streams;
+using EventSourcing.Storage.Json;
 using EventSourcing.Transactions;
 
 namespace EventSourcing.Tests;
 
-public sealed class TransactionalIdempotencyRegressionTests
+public sealed class TransactionalIdempotencyRegressionTests : IDisposable
 {
-    private readonly InMemoryEventStreamStore _store = new();
+    private ITransactionSessionStore _store = new InMemoryEventStreamStore();
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "idempotency-regression-" + Guid.NewGuid());
+    private void UseStore(bool durable)
+    { if (durable) _store = new JsonEventStreamStore(Path.Combine(_directory, "events.json"), new JsonEventCodec().Register<LedgerEvent>("ledger/v1")); }
     private readonly Guid _stream = Guid.NewGuid();
 
     private readonly Guid _journal = Guid.NewGuid();
@@ -22,9 +26,12 @@ public sealed class TransactionalIdempotencyRegressionTests
         });
     }
 
-    [Fact]
-    public async Task Same_operation_with_new_event_ID_has_one_committed_effect()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Same_operation_with_new_event_ID_has_one_committed_effect(bool durable)
     {
+        UseStore(durable);
         await Deliver("credit/1", Guid.NewGuid(), 100m);
         await Deliver("credit/1", Guid.NewGuid(), 100m);
         var history = await _store.ReadAsync(_stream);
@@ -32,9 +39,12 @@ public sealed class TransactionalIdempotencyRegressionTests
         Assert.Equal(100m, history.Cast<LedgerEvent>().Sum(e => e.Amount));
     }
 
-    [Fact]
-    public async Task Replay_proposed_threshold_transfer_does_not_duplicate_recorded_consequence()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Replay_proposed_threshold_transfer_does_not_duplicate_recorded_consequence(bool durable)
     {
+        UseStore(durable);
         await Deliver("income/1", Guid.NewGuid(), 100m);
         await Deliver("threshold/1", Guid.NewGuid(), -25m);
         var selectedHistory = await _store.ReadAsync(_stream);
@@ -49,21 +59,32 @@ public sealed class TransactionalIdempotencyRegressionTests
         Assert.Equal(75m, (await _store.ReadAsync(_stream)).Cast<LedgerEvent>().Sum(e => e.Amount));
     }
 
-    [Fact]
-    public async Task Equal_payloads_with_distinct_keys_remain_distinct()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Equal_payloads_with_distinct_keys_remain_distinct(bool durable)
     {
+        UseStore(durable);
         await Deliver("credit/1", Guid.NewGuid(), 100m);
         await Deliver("credit/2", Guid.NewGuid(), 100m);
         Assert.Equal(2, (await _store.ReadAsync(_stream)).Count);
     }
 
-    [Fact]
-    public async Task Same_event_ID_is_already_rejected_without_second_effect()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Same_event_ID_is_already_rejected_without_second_effect(bool durable)
     {
+        UseStore(durable);
         var id = Guid.NewGuid();
         await Deliver("credit/1", id, 100m);
         var saved = EventStream.Restore(_stream, await _store.ReadAsync(_stream));
         Assert.Throws<DuplicateEventException>(() => saved.Append(new LedgerEvent(id, 100m)));
         Assert.Single(await _store.ReadAsync(_stream));
+    }
+    public void Dispose()
+    {
+        (_store as IDisposable)?.Dispose();
+        if (Directory.Exists(_directory)) Directory.Delete(_directory, true);
     }
 }
