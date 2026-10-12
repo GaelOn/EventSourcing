@@ -35,6 +35,17 @@ jobs:
       run: dotnet build EventSourcing.slnx -c Release --no-restore -warnaserror
     - name: Test
       run: dotnet test EventSourcing.slnx -c Release --no-build --no-restore --logger trx --results-directory artifacts/test-results
+    - name: Verify generated package consumers
+      shell: bash
+      run: |
+        set -euo pipefail
+        consumer_cache="$PWD/artifacts/consumer-packages"
+        for consumer in validation/PackageConsumer validation/DependencyInjectionConsumer validation/TransactionConsumer; do
+          dotnet restore "$consumer" --configfile "$consumer/NuGet.Config" --packages "$consumer_cache"
+          dotnet run --project "$consumer" -c Release --no-restore -p:RestorePackagesPath="$consumer_cache"
+        done
+        dotnet restore samples/EventSourcing.PackageConsumer --source "$PWD/artifacts/packages" --packages "$consumer_cache"
+        dotnet run --project samples/EventSourcing.PackageConsumer -c Release --no-restore -p:RestorePackagesPath="$consumer_cache"
     - name: Upload test results
       if: always()
       uses: actions/upload-artifact@v4

@@ -17,3 +17,12 @@ cancellation appends a compensating event and retains history.
 See the [complete guide and examples](https://github.com/GaelOn/EventSourcing/blob/main/README.md),
 [migration guide](https://github.com/GaelOn/EventSourcing/blob/main/docs/migration-0.2.0.md), and
 [lifecycle contracts](https://github.com/GaelOn/EventSourcing/blob/main/docs/refinement-lifecycle.md).
+
+## Transactional idempotency (0.3.0)
+
+`OperationProcessor` uses an injectable `IEventTransactionCoordinator` with scoped
+client-defined keys, isolated event plans and atomic consumed receipts. Duplicate
+proposals never run consequences. Replay uses a selected-history admission view
+and still applies each original historical event. Low-level event-ID persistence
+is unchanged; it does not infer semantic keys. Optional JSON storage and DI remain
+separate packages. See repository docs/transactional-idempotency.md.
