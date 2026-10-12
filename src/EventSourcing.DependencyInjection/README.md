@@ -133,3 +133,8 @@ See `validation/DependencyInjectionConsumer` for a package-only DI consumer and
 include XML IntelliSense documentation and are licensed under MIT.
 
 Microsoft documents [keyed services and scope validation](https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection).
+
+`AddLocalEventTransactions(journalId)` registers singleton coordinator/processor
+for the explicitly registered singleton `ITransactionSessionStore`. Recovery is
+invoked after reopening before work admission. The journal ID must remain stable.
+Standard DI replacement supports alternate coordinators with the same guarantees.

@@ -7,8 +7,10 @@ namespace EventSourcing.Streams;
 /// Thread-safe, non-durable store. Share one instance for one ledger; independent instances are separate ledgers.
 /// Event payloads must be immutable. Batch reads and writes are serialized by the same gate.
 /// </summary>
-public sealed class InMemoryEventStreamStore : IAtomicEventStreamStore
+public sealed class InMemoryEventStreamStore : EventSourcing.Transactions.ITransactionSessionStore
 {
+    /// <summary>Identity of this non-durable store lifetime.</summary>
+    public Guid SessionId { get; } = Guid.NewGuid();
     private readonly object _gate = new();
     private ImmutableDictionary<Guid, StoredStream> _streams = ImmutableDictionary<Guid, StoredStream>.Empty;
 

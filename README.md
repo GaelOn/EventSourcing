@@ -3,8 +3,9 @@
 Licensed under the [MIT License](LICENSE). Copyright (c) 2026 Gaël Dupire.
 
 A standalone .NET 10 library for immutable business aggregates, deterministic replay, optimistic
-concurrency, atomic multi-aggregate persistence, and complete state snapshots. Version **0.2.0**
-is a breaking API refactor; see the [migration guide](docs/migration-0.2.0.md).
+concurrency, atomic multi-aggregate persistence, and complete state snapshots. Version **0.3.0** adds transactional operation idempotency and optional durable local JSON storage.
+The 0.2.0 aggregate refactor remains documented in the [migration guide](docs/migration-0.2.0.md).
+See the [transactional contract](docs/transactional-idempotency.md) and [release handoff](docs/release-0.3.0.md).
 
 ## Responsibilities
 
@@ -220,16 +221,16 @@ dotnet build EventSourcing.slnx -c Release --no-restore -warnaserror
 dotnet test EventSourcing.slnx -c Release --no-build --no-restore
 ```
 
-Release builds generate all three 0.2.0 packages and portable symbols under ignored `artifacts/packages/`.
+Release builds generate all four 0.3.0 packages and portable symbols under ignored `artifacts/packages/`.
 The [package-only consumers](validation/PackageConsumer/README.md), DI consumer, and compatibility sample
-compile/run against generated packages without source project references. Core-only consumption has no
+and [transaction consumer](validation/TransactionConsumer/README.md) compile/run against generated packages without source project references. Core-only consumption has no
 transitive DI dependency. Public APIs include XML IntelliSense documentation.
 
 [BenchmarkDotNet performance tests](benchmarks/EventSourcing.PerformanceTests/README.md) run separately in
 Release with allocation diagnostics, setup/IDs and correctness checks outside measured operations, and
 recorded machine/runtime/source provenance. Correctness CI contains no timing thresholds.
 
-GitHub release publishing remains an explicit later operation. Publishing a tag such as `v0.2.0` triggers
+GitHub release publishing remains an explicit later operation. Publishing a tag such as `v0.3.0` triggers
 `.github/workflows/release.yml`, which builds/tests, publishes matching packages to GitHub Packages and
 attaches packages/symbols. Never overwrite an existing published version. This local refactor does not
 publish or update Family Horizon's package dependency; those steps follow validated release publication.

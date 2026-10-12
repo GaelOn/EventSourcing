@@ -9,6 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- Resolve core transitively through the optional compatibility package; no project references. -->
-    <PackageReference Include="EventSourcing.Compatibility" Version="0.2.0" />
+    <PackageReference Include="EventSourcing.Compatibility" Version="0.3.0" />
   </ItemGroup>
 </Project>
