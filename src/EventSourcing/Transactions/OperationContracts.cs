@@ -21,7 +21,21 @@ public sealed record OperationKey
 }
 
 /// <summary>Admission distinguishes expected duplicates from unresolved owners and replay suppression.</summary>
-public enum OperationStatus { Claimed, Committed, AlreadyConsumed, InProgress, RetryAllowed, ReplaySuppressed }
+public enum OperationStatus
+{
+    /// <summary>Exclusive claim acquired.</summary>
+    Claimed,
+    /// <summary>Complete outcome published by this invocation.</summary>
+    Committed,
+    /// <summary>Existing consumed operation; no consequences invoked.</summary>
+    AlreadyConsumed,
+    /// <summary>Owner unresolved; no second execution is authorized.</summary>
+    InProgress,
+    /// <summary>No consumed outcome or active claim remains.</summary>
+    RetryAllowed,
+    /// <summary>Proposal absent from selected historical receipts; live admission is forbidden during replay.</summary>
+    ReplaySuppressed
+}
 
 /// <summary>Immutable result; consumed outcomes are retained even for decisions with no domain events.</summary>
 public sealed record OperationResult(OperationStatus Status, TransactionHandle? Handle = null,

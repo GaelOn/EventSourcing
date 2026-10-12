@@ -1,4 +1,5 @@
 using EventSourcing.Streams;
+using EventSourcing.Transactions;
 
 namespace EventSourcing.Tests;
 
@@ -7,12 +8,18 @@ public sealed class TransactionalIdempotencyRegressionTests
     private readonly InMemoryEventStreamStore _store = new();
     private readonly Guid _stream = Guid.NewGuid();
 
+    private readonly Guid _journal = Guid.NewGuid();
+
     // Semantic identity is deliberately independent of delivery event IDs.
     private async Task Deliver(string operation, Guid deliveryId, decimal amount)
     {
-        _ = operation;
-        var stream = EventStream.Restore(_stream, await _store.ReadAsync(_stream));
-        await stream.Append(new LedgerEvent(deliveryId, amount)).SaveAsync(_store);
+        var processor = new OperationProcessor(new LocalEventTransactionCoordinator(_store, _journal));
+        await processor.ExecuteAsync(new("synthetic/v1", operation), "ledger/v1", async _ =>
+        {
+            var stream = EventStream.Restore(_stream, await _store.ReadAsync(_stream))
+                .Append(new LedgerEvent(deliveryId, amount));
+            return new(new[] { new StreamAppend(_stream, stream.PersistedVersion, stream.PendingEvents) });
+        });
     }
 
     [Fact]
@@ -31,9 +38,13 @@ public sealed class TransactionalIdempotencyRegressionTests
         await Deliver("income/1", Guid.NewGuid(), 100m);
         await Deliver("threshold/1", Guid.NewGuid(), -25m);
         var selectedHistory = await _store.ReadAsync(_stream);
+        var replay = new ReplayOperationAdmission(_journal, await _store.ReadBatchAsync(new[] { _stream, _journal }));
+        var journalBefore = (await _store.ReadAsync(_journal)).ToArray();
         // A synthetic threshold rule proposes the same operation while reconstructing its cause.
         foreach (var e in selectedHistory.Cast<LedgerEvent>())
-            if (e.Amount >= 100m) await Deliver("threshold/1", Guid.NewGuid(), -25m);
+            if (e.Amount >= 100m)
+                Assert.Equal(OperationStatus.AlreadyConsumed, replay.Resolve(new("synthetic/v1", "threshold/1"), "ledger/v1").Status);
+        Assert.Equal(journalBefore, await _store.ReadAsync(_journal));
         Assert.Equal(2, (await _store.ReadAsync(_stream)).Count);
         Assert.Equal(75m, (await _store.ReadAsync(_stream)).Cast<LedgerEvent>().Sum(e => e.Amount));
     }
@@ -51,7 +62,8 @@ public sealed class TransactionalIdempotencyRegressionTests
     {
         var id = Guid.NewGuid();
         await Deliver("credit/1", id, 100m);
-        await Assert.ThrowsAsync<DuplicateEventException>(() => Deliver("credit/1", id, 100m));
+        var saved = EventStream.Restore(_stream, await _store.ReadAsync(_stream));
+        Assert.Throws<DuplicateEventException>(() => saved.Append(new LedgerEvent(id, 100m)));
         Assert.Single(await _store.ReadAsync(_stream));
     }
 }

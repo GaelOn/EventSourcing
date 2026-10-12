@@ -3,7 +3,15 @@ using System.Text.Json.Serialization;
 namespace EventSourcing.Transactions;
 
 /// <summary>Durable lifecycle markers; only Committed is an authoritative operation outcome.</summary>
-public enum OperationJournalKind { Claimed, Committed, RolledBack }
+public enum OperationJournalKind
+{
+    /// <summary>Durable exclusive admission; business consequences are still isolated.</summary>
+    Claimed,
+    /// <summary>Receipt and complete domain batch have been atomically published.</summary>
+    Committed,
+    /// <summary>Attempt abandoned without authoritative domain effects.</summary>
+    RolledBack
+}
 
 /// <summary>Exact committed participant range, including unchanged expected-version dependencies.</summary>
 public sealed class OperationRange
