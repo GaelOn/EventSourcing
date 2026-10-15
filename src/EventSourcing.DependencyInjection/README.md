@@ -1,9 +1,22 @@
 # EventSourcing.DependencyInjection
 
+## Package and installation
+
+Version **0.3.0** targets **.NET 10** and is licensed under MIT. Configure the [GitHub Packages NuGet feed](https://nuget.pkg.github.com/GaelOn/index.json) and an authorized package-reading credential before installing:
+
+```bash
+dotnet add package EventSourcing.DependencyInjection --version 0.3.0
+```
+
+Keep credentials out of source control. Public repository visibility does not imply anonymous package restore. Alternatively, build the repository in Release and use its generated packages as a local feed; see the [root guide](https://github.com/GaelOn/EventSourcing/blob/main/README.md).
+
+
 Optional startup composition for core's pure, versioned event handlers. The adapter references
 `EventSourcing` and `Microsoft.Extensions.DependencyInjection.Abstractions`; it does not reference
 the container implementation. Applications select a compatible implementation. Core remains
 usable without this package, DI abstractions, or a container.
+
+The following snippets show composition patterns and assume the example business types and application variables. For a complete executable example, use the [package-only DI consumer](https://github.com/GaelOn/EventSourcing/blob/main/validation/DependencyInjectionConsumer/Program.cs).
 
 ## Manual composition remains supported
 
@@ -123,13 +136,12 @@ stream's history or pending events. Persisted business cancellation appends a ne
 
 ## Validation and packages
 
-Real-container integration tests cover external implementations, injected configuration, client
+Integration tests using an actual DI service container (not Docker) cover external implementations, injected configuration, client
 registration, duplicates/missing handlers, lifetimes/disposal, retained handlers, rule selection,
 owned entity state through persisted replay, and container-query-free forward/reverse transitions.
 The implementation container package is referenced only by tests and consumer applications.
 
-See `validation/DependencyInjectionConsumer` for a package-only DI consumer and
-`validation/PackageConsumer` for a core-only manual-composition consumer. Generated packages
+See the [DI consumer](https://github.com/GaelOn/EventSourcing/blob/main/validation/DependencyInjectionConsumer/README.md) and [core consumer](https://github.com/GaelOn/EventSourcing/blob/main/validation/PackageConsumer/README.md) for executable package-only examples. Generated packages
 include XML IntelliSense documentation and are licensed under MIT.
 
 Microsoft documents [keyed services and scope validation](https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection).
@@ -138,3 +150,4 @@ Microsoft documents [keyed services and scope validation](https://learn.microsof
 for the explicitly registered singleton `ITransactionSessionStore`. Recovery is
 invoked after reopening before work admission. The journal ID must remain stable.
 Standard DI replacement supports alternate coordinators with the same guarantees.
+
