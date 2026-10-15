@@ -110,7 +110,7 @@ Failures report seed and ordered action trace. Reproduce a seed, for example:
 
 ```sh
 dotnet test src/Test/EventSourcing.Tests/EventSourcing.Tests.csproj -c Release --no-build \
-  --filter 'FullyQualifiedName~OperationProtocolModelTests&DisplayName~(1)'
+  --filter 'FullyQualifiedName~OperationProtocolModelTests&DisplayName~seed: 1\)'
 ```
 
 `OperationProtocolConcurrencyTests` races eight callers against both stores.
