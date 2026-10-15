@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+    inputs:
+      execution_target:
+        description: Validation runner
+        required: true
+        type: choice
+        options:
+          - local
+          - github
+        default: local
 
 permissions:
   contents: read
@@ -20,7 +29,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.execution_target == 'github' && 'ubuntu-latest' || fromJSON('["self-hosted","linux","x64","eventsourcing","local-linux"]') }}
     timeout-minutes: 15
 
     steps:
@@ -29,6 +38,13 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         global-json-file: global.json
+    - name: Remove previous checkout build outputs
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+        find src benchmarks samples validation -type d \( -name bin -o -name obj \) -prune -exec rm -rf -- {} +
+        rm -rf -- artifacts
     - name: Restore dependencies
       run: dotnet restore EventSourcing.slnx
     - name: Build Release and generate packages

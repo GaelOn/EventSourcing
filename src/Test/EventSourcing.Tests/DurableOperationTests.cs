@@ -64,6 +64,91 @@ public sealed class DurableOperationTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(17, "Staged", false)]
+    [InlineData(29, "BeforeReplace", false)]
+    [InlineData(43, "AfterReplace", true)]
+    public async Task Generated_prefix_survives_abrupt_process_death_without_lost_or_duplicate_effects(int seed, string point, bool published)
+    {
+        Directory.CreateDirectory(_directory);
+        var start = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true,
+            RedirectStandardInput = true, UseShellExecute = false };
+        var assembly = typeof(DurableOperationTests).Assembly.Location;
+        foreach (var arg in new[] { "exec", "--runtimeconfig", Path.ChangeExtension(assembly, ".runtimeconfig.json"),
+            "--depsfile", Path.ChangeExtension(assembly, ".deps.json"), typeof(CrashProbe).Assembly.Location,
+            StorePath, point, seed.ToString(System.Globalization.CultureInfo.InvariantCulture) }) start.ArgumentList.Add(arg);
+        using var child = Process.Start(start)!;
+        var errors = child.StandardError.ReadToEndAsync();
+        try
+        {
+            var ready = await child.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.True(ready == "READY", $"Seed {seed}, barrier {point}: " + (child.HasExited ? await errors : ready));
+            child.Kill(entireProcessTree: true);
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.NotEqual(0, child.ExitCode);
+        }
+        finally
+        {
+            try
+            {
+                if (!child.HasExited)
+                {
+                    child.Kill(entireProcessTree: true);
+                    await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                }
+            }
+            catch { /* Preserve the original barrier/test failure. */ }
+        }
+        using var store = Open();
+        var coordinator = Coordinate(store);
+        var before = await History(store);
+        var completed = published ? 3 : 2;
+        Assert.Equal(completed, before[CrashProbe.Source].Count);
+        Assert.Equal(completed, before[CrashProbe.Destination].Count);
+        Assert.Equal(published ? OperationJournalKind.Committed : OperationJournalKind.Claimed,
+            Assert.IsType<OperationJournalEvent>(before[CrashProbe.Journal].Last()).Kind);
+        Assert.Equal(published ? 0 : 1, await coordinator.RecoverAsync());
+        for (var index = 0; index < 3; index++)
+        {
+            var captured = index;
+            var result = await new OperationProcessor(coordinator).ExecuteAsync(CrashProbe.GeneratedKey(seed, index), "generated/v1",
+                _ => Task.FromResult(CrashProbe.GeneratedPlan(seed, captured)));
+            Assert.Equal(index < completed ? OperationStatus.AlreadyConsumed : OperationStatus.Committed, result.Status);
+        }
+        var final = await History(store);
+        foreach (var stream in new[] { CrashProbe.Source, CrashProbe.Destination })
+        {
+            var expected = Enumerable.Range(0, 3).SelectMany(i => CrashProbe.GeneratedPlan(seed, i).Appends.Single(a => a.StreamId == stream).Events)
+                .Cast<SyntheticPosting>().ToArray();
+            var actual = final[stream].Cast<SyntheticPosting>().ToArray();
+            Assert.Equal(expected.Select(e => (e.Id, e.Amount, e.Reason, e.Metadata)), actual.Select(e => (e.Id, e.Amount, e.Reason, e.Metadata)));
+        }
+        var journal = final[CrashProbe.Journal].Cast<OperationJournalEvent>().ToArray();
+        var kinds = new[] { OperationJournalKind.Claimed, OperationJournalKind.Committed,
+            OperationJournalKind.Claimed, OperationJournalKind.Committed, OperationJournalKind.Claimed }
+            .Concat(published ? new[] { OperationJournalKind.Committed } : new[] {
+                OperationJournalKind.RolledBack, OperationJournalKind.Claimed, OperationJournalKind.Committed });
+        Assert.Equal(kinds, journal.Select(e => e.Kind));
+        for (var index = 0; index < 3; index++)
+        {
+            var key = CrashProbe.GeneratedKey(seed, index);
+            var receipt = Assert.Single(journal, e => e.Key == key && e.Kind == OperationJournalKind.Committed);
+            Assert.Equal("generated/v1", receipt.ContractVersion);
+            Assert.Equal($"generated-{index}", receipt.Outcome);
+            Assert.Equal(journal.Last(e => e.Key == key && e.Kind == OperationJournalKind.Claimed).AttemptId, receipt.AttemptId);
+            Assert.Equal(new[] { CrashProbe.Source, CrashProbe.Destination }, receipt.Ranges.Select(r => r.StreamId));
+            foreach (var range in receipt.Ranges)
+            {
+                Assert.Equal(index, range.BeforeVersion);
+                Assert.Equal(final[range.StreamId].Skip(index).Take(1).Select(e => e.Id), range.EventIds);
+            }
+            Assert.Equal(OperationStatus.AlreadyConsumed, (await new OperationProcessor(coordinator).ExecuteAsync(key,
+                "generated/v1", _ => throw new Exception("Duplicate generated callback"))).Status);
+        }
+        Assert.Equal(0, await coordinator.RecoverAsync());
+        OperationEvidence.Validate(CrashProbe.Journal, final[CrashProbe.Journal], final);
+    }
+
     private static async Task AssertFinal(JsonEventStreamStore store)
     {
         var history = await History(store);

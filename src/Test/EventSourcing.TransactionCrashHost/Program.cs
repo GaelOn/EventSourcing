@@ -20,6 +20,7 @@ public static class CrashProbe
         new StreamAppend(Destination, 0, new[] { new SyntheticPosting(DestinationEvent, 25m, "destination", new(1, Destination)) }) }, "transfer-complete");
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length == 3) return await GeneratedSequence(args);
         var armed = false;
         using var store = new JsonEventStreamStore(args[0], Codec(), point =>
         {
@@ -32,6 +33,39 @@ public static class CrashProbe
         if (args[1] == "Staged") Block();
         armed = true;
         await coordinator.CommitAsync(handle);
+        return 0;
+    }
+    public static OperationKey GeneratedKey(int seed, int index) => new("generated/v1", $"{seed}/{index}");
+    public static OperationPlan GeneratedPlan(int seed, int index)
+    {
+        var random = new Random(seed + index * 101);
+        var amount = random.Next(1, 100);
+        var sourceId = new Guid(Enumerable.Range(0, 16).Select(_ => (byte)random.Next(256)).ToArray());
+        var destinationId = new Guid(Enumerable.Range(0, 16).Select(_ => (byte)random.Next(256)).ToArray());
+        return new OperationPlan(new[] {
+            new StreamAppend(Source, index, new[] { new SyntheticPosting(sourceId, -amount, $"source-{index}", new(index + 1, Source)) }),
+            new StreamAppend(Destination, index, new[] { new SyntheticPosting(destinationId, amount, $"destination-{index}", new(index + 1, Destination)) }) }, $"generated-{index}");
+    }
+    private static async Task<int> GeneratedSequence(string[] args)
+    {
+        var seed = int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture);
+        var armed = false;
+        using var store = new JsonEventStreamStore(args[0], Codec(), point =>
+        {
+            if (armed && point.ToString() == args[1]) Block();
+        });
+        var coordinator = new LocalEventTransactionCoordinator(store, Journal);
+        for (var index = 0; index < 3; index++)
+        {
+            var handle = (await coordinator.BeginAsync(GeneratedKey(seed, index), "generated/v1")).Handle!;
+            await coordinator.StageAsync(handle, GeneratedPlan(seed, index));
+            if (index == 2)
+            {
+                if (args[1] == "Staged") Block();
+                armed = true;
+            }
+            await coordinator.CommitAsync(handle);
+        }
         return 0;
     }
     private static void Block()

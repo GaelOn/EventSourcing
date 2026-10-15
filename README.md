@@ -234,3 +234,31 @@ GitHub release publishing remains an explicit later operation. Publishing a tag 
 `.github/workflows/release.yml`, which builds/tests, publishes matching packages to GitHub Packages and
 attaches packages/symbols. Never overwrite an existing published version. This local refactor does not
 publish or update Family Horizon's package dependency; those steps follow validated release publication.
+
+## Raw append contract verification
+
+Raw saves retain strict expected-version semantics. Semantic retry recognition uses
+explicit operation keys and journal receipts. See [the consumer inventory, B0 decision
+and protocol test matrix](docs/raw-append-contract.md).
+
+## Validation runners
+
+The `.NET` workflow runs pull-request and main-push validation on the registered
+`eventsourcing-intel-local` self-hosted Linux X64 runner, selected by the labels
+`self-hosted`, `linux`, `x64`, `eventsourcing` and `local-linux`. The runner must be
+online and carry all these labels; otherwise jobs remain queued.
+
+Manual **Run workflow** validation defaults `execution_target` to `local`.
+Choose `github` explicitly to use `ubuntu-latest` for that manual run. Both targets
+install the SDK selected by `global.json` and run the same Release build, tests
+(including process-crash tests), package consumers and artifact steps.
+
+Before restoring/building, validation removes this checkout's `bin`/`obj` folders
+under `src`, `benchmarks`, `samples` and `validation`, plus its `artifacts` directory.
+This prevents stale binaries, test reports, generated packages or the isolated
+consumer package cache from satisfying a new validation. Cleanup does not target
+runner registration, shared volumes, global caches or other projects.
+
+`Publish release` remains on GitHub-hosted `ubuntu-latest`, with its existing
+release trigger and publication conditions. Selecting a validation runner never
+publishes packages or creates a release.
