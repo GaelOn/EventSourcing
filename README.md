@@ -234,3 +234,9 @@ GitHub release publishing remains an explicit later operation. Publishing a tag 
 `.github/workflows/release.yml`, which builds/tests, publishes matching packages to GitHub Packages and
 attaches packages/symbols. Never overwrite an existing published version. This local refactor does not
 publish or update Family Horizon's package dependency; those steps follow validated release publication.
+
+## Raw append contract verification
+
+Raw saves retain strict expected-version semantics. Semantic retry recognition uses
+explicit operation keys and journal receipts. See [the consumer inventory, B0 decision
+and protocol test matrix](docs/raw-append-contract.md).
