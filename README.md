@@ -1,11 +1,65 @@
 # EventSourcing
 
-Licensed under the [MIT License](LICENSE). Copyright (c) 2026 Gaël Dupire.
+**A .NET 10 library for immutable business state, deterministic replay and explicit persistence guarantees.**
 
-A standalone .NET 10 library for immutable business aggregates, deterministic replay, optimistic
-concurrency, atomic multi-aggregate persistence, and complete state snapshots. Version **0.3.0** adds transactional operation idempotency and optional durable local JSON storage.
-The 0.2.0 aggregate refactor remains documented in the [migration guide](docs/migration-0.2.0.md).
-See the [transactional contract](docs/transactional-idempotency.md) and [release handoff](docs/release-0.3.0.md).
+EventSourcing separates business transitions from event history and storage. It supports immutable aggregates, heterogeneous event streams, optimistic concurrency, atomic multi-stream saves and complete state snapshots. Version **0.3.0** adds transactional operation idempotency and an optional local JSON adapter.
+
+Built by [Gaël Dupire](https://github.com/GaelOn) and used by Family Horizon, it is intended for applications that need to explain how state was produced and recover operations without duplicating committed effects.
+
+Licensed under the [MIT License](LICENSE).
+
+## Start here
+
+- Read [the package consumer](validation/PackageConsumer/README.md) for a complete executable core example.
+- Read [transactional idempotency](docs/transactional-idempotency.md) for operation claims, receipts and recovery.
+- Read [the raw append contract](docs/raw-append-contract.md) before implementing retries.
+- Read [the migration guide](docs/migration-0.2.0.md) when upgrading an earlier aggregate integration.
+
+## Packages
+
+The current package version declared by the projects is **0.3.0**. Verify availability and access in the [GitHub Packages feed](https://github.com/GaelOn?tab=packages&repo_name=EventSourcing) before installing.
+
+| Package | Purpose |
+| --- | --- |
+| `EventSourcing` | Core state, handlers, streams, snapshots and operation contracts. |
+| `EventSourcing.DependencyInjection` | Optional explicit handler registration through Microsoft DI abstractions. |
+| `EventSourcing.Storage.Json` | Optional exclusively owned local JSON event and operation-journal store. |
+| `EventSourcing.Compatibility` | Legacy reversible callback lifecycle; not the preferred API for new integrations. |
+
+Core has no external package dependencies. Applications choose adapters and retain responsibility for business invariants, historical rule implementations and deployment suitability.
+
+## Installation
+
+Use a .NET 10 project. Packages are distributed through GaelOn's GitHub Packages NuGet feed; do not assume anonymous restore because the source repository is public.
+
+Configure this feed using your organization's approved credential mechanism:
+
+```text
+https://nuget.pkg.github.com/GaelOn/index.json
+```
+
+For local use, an authorized GitHub credential with package-reading access is required. Store credentials in a secret manager or supported process-scoped NuGet mechanism, never in source control. Repository access and package access are separate permissions.
+
+After configuring the feed and authentication:
+
+```bash
+dotnet add package EventSourcing --version 0.3.0
+```
+
+Add optional packages only when needed. For a source-only evaluation, build this repository in Release and use its generated `artifacts/packages` folder as a local feed, following the [package consumer instructions](validation/PackageConsumer/README.md). This avoids claiming that local-feed validation verifies registry access.
+
+## Guarantees and boundaries
+
+- Business transitions are supplied by the application and must be pure and deterministic.
+- Atomic saves check all participant versions, including unchanged read dependencies.
+- Raw appends remain strict: repeating a stale append is a concurrency conflict. An exception after publication can leave the outcome uncertain.
+- Operation keys and durable journal receipts support semantic retry recognition. The library does not compare arbitrary caller payloads; applications must bind operation identity to the intended work.
+- Recovery is explicit. Follow the coordinator contract when reopening stores with abandoned claims.
+- The JSON adapter owns a local path through an exclusive OS file lock. It is not a distributed database; each write rewrites the complete document.
+- Process-crash tests do not establish arbitrary power-loss or network-filesystem durability.
+- Snapshot compatibility and event schema evolution remain explicit application responsibilities.
+
+The library does not provide a distributed transaction manager, automatic schema migration or a universal production storage choice. The sections below explain the contracts and their limits.
 
 ## Responsibilities
 
@@ -81,6 +135,10 @@ public sealed class InventoryRoot : EventSourcedAggregate<Inventory>
 Compose handlers once at startup:
 
 ```csharp
+var aggregateId = Guid.NewGuid();
+var receiptId = Guid.NewGuid();
+var renameId = Guid.NewGuid();
+
 var rules = EventHandlerDispatcher<Inventory>.CreateBuilder("inventory/v1")
     .Register<Received>(new ReceiptHandler()).Register<Renamed>(new RenameHandler()).Build();
 var opening = new Inventory("Original", new StockItem("BOOK", 10));
@@ -210,8 +268,7 @@ formats. Unknown kinds/unsupported formats fail before reconstructed roots are p
 and upcasters are explicit application responsibilities. Snapshot schemas are independently versioned.
 
 Exceptions expose stream IDs, `ExpectedVersion`, `ActualVersion`, `EventId`, clone types, `EventType`, rules,
-and schema identities so consumers need not parse messages. The file adapters are test fixtures, not a
-production database or deployment selection.
+and schema identities so consumers need not parse messages. Test-only file adapters remain fixtures. The shipped JSON adapter is an optional exclusively owned local durable store, not a distributed database or a default production deployment choice. See its [package guide](src/EventSourcing.Storage.Json/README.md) and the [transactional contract](docs/transactional-idempotency.md).
 
 ## Build, package consumption, and performance
 
@@ -230,10 +287,13 @@ transitive DI dependency. Public APIs include XML IntelliSense documentation.
 Release with allocation diagnostics, setup/IDs and correctness checks outside measured operations, and
 recorded machine/runtime/source provenance. Correctness CI contains no timing thresholds.
 
-GitHub release publishing remains an explicit later operation. Publishing a tag such as `v0.3.0` triggers
-`.github/workflows/release.yml`, which builds/tests, publishes matching packages to GitHub Packages and
-attaches packages/symbols. Never overwrite an existing published version. This local refactor does not
-publish or update Family Horizon's package dependency; those steps follow validated release publication.
+## Releases
+
+Version 0.3.0 is the current documented package line; see the [release notes](docs/release-0.3.0.md).
+
+Publishing a **GitHub release** triggers [`release.yml`](.github/workflows/release.yml). A tag push alone does not trigger that workflow. The workflow builds and tests the tagged source, publishes version-matched packages to GitHub Packages and attaches packages and symbols to the release.
+
+Release publication is an explicit operator action. Never reuse a published package version. Making this repository public does not publish another package version or change package access settings. Review the actual workflow before releasing; validation CI and release execution have separate responsibilities.
 
 ## Raw append contract verification
 
@@ -262,3 +322,4 @@ runner registration, shared volumes, global caches or other projects.
 `Publish release` remains on GitHub-hosted `ubuntu-latest`, with its existing
 release trigger and publication conditions. Selecting a validation runner never
 publishes packages or creates a release.
+
